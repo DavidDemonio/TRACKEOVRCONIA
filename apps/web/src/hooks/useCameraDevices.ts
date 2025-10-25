@@ -11,6 +11,14 @@ export const useCameraDevices = () => {
 
   useEffect(() => {
     const enumerate = async () => {
+      if (typeof window !== 'undefined') {
+        const isSecure = window.isSecureContext || ['localhost', '127.0.0.1'].includes(window.location.hostname);
+        if (!isSecure) {
+          setError('La enumeración de cámaras requiere ejecutar la app bajo HTTPS o localhost.');
+          setDevices([]);
+          return;
+        }
+      }
       if (!navigator.mediaDevices?.enumerateDevices) {
         setDevices([]);
         return;

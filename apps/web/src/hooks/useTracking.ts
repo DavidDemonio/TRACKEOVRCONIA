@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef } from 'react';
+import { useCallback, useEffect, useMemo, useRef } from 'react';
 import { useAppStore } from '../state/store';
 import type { BodyFrame } from '@trackeovrconia/proto';
 
@@ -23,11 +23,25 @@ export const useTracking = (modelAssetPath: string) => {
   const workerRef = useRef<Worker>();
   const wsRef = useRef<WebSocket>();
   const lastTimestamp = useRef<number>(0);
+  const frameHandleRef = useRef<number>();
+  const fallbackHandleRef = useRef<number>();
+  const streamRef = useRef<MediaStream | null>(null);
+  const trackingActiveRef = useRef(false);
   const setMetrics = useAppStore((state) => state.setMetrics);
   const setFrame = useAppStore((state) => state.setFrame);
   const smoothing = useAppStore((state) => state.smoothingStrength);
   const videoConfig = useAppStore((state) => state.videoConfig);
   const selectedCamera = useAppStore((state) => state.selectedCamera);
+  const trackingActive = useAppStore((state) => state.trackingActive);
+  const setTrackingActive = useAppStore((state) => state.setTrackingActive);
+  const setTrackingError = useAppStore((state) => state.setTrackingError);
+  const trackingError = useAppStore((state) => state.trackingError);
+
+  const secureContext = useMemo(() => {
+    if (typeof window === 'undefined') return false;
+    if (window.isSecureContext) return true;
+    return window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1';
+  }, []);
 
   const initWorker = useCallback(() => {
     if (workerRef.current) return;
@@ -82,48 +96,135 @@ export const useTracking = (modelAssetPath: string) => {
   const captureFrame = useCallback(
     async (_now: DOMHighResTimeStamp, metadata: VideoFrameCallbackMetadata) => {
       const video = videoRef.current;
-      if (!video || !workerRef.current) return;
-      const bitmap = await createImageBitmap(video);
-      const timestamp = metadata.mediaTime * 1000;
-      const dt = timestamp - lastTimestamp.current;
-      const cameraFps = dt > 0 ? 1000 / dt : videoConfig.targetFps;
-      lastTimestamp.current = timestamp;
-      workerRef.current.postMessage(
-        {
-          type: 'frame',
-          frame: bitmap,
-          timestamp,
-          cameraFps,
-        },
-        [bitmap],
-      );
-      video.requestVideoFrameCallback(captureFrame);
+      if (!video || !workerRef.current || !trackingActiveRef.current) {
+        return false;
+      }
+      try {
+        const bitmap = await createImageBitmap(video);
+        const timestamp = metadata.mediaTime * 1000;
+        const dt = timestamp - lastTimestamp.current;
+        const cameraFps = dt > 0 ? 1000 / dt : videoConfig.targetFps;
+        lastTimestamp.current = timestamp;
+        workerRef.current.postMessage(
+          {
+            type: 'frame',
+            frame: bitmap,
+            timestamp,
+            cameraFps,
+          },
+          [bitmap],
+        );
+      } catch (error) {
+        console.error('Frame capture error', error);
+        return false;
+      }
+      return trackingActiveRef.current;
     },
     [videoConfig.targetFps],
   );
 
-  useEffect(() => {
-    ensureSocket();
-    initWorker();
-  }, [ensureSocket, initWorker]);
-
-  useEffect(() => {
+  const scheduleNextFrame = useCallback(() => {
     const video = videoRef.current;
     if (!video) return;
-    if (!navigator.mediaDevices?.getUserMedia) return;
-    navigator.mediaDevices
-      .getUserMedia({ video: { deviceId: selectedCamera || undefined } })
-      .then((stream) => {
-        video.srcObject = stream;
-        return video.play();
-      })
+    if ('requestVideoFrameCallback' in video) {
+      frameHandleRef.current = video.requestVideoFrameCallback(async (now, metadata) => {
+        const proceed = await captureFrame(now, metadata);
+        if (proceed) {
+          scheduleNextFrame();
+        }
+      });
+      return;
+    }
+    const fallbackVideo = video as HTMLVideoElement;
+    fallbackHandleRef.current = window.setTimeout(async () => {
+      const metadata = {
+        mediaTime: fallbackVideo.currentTime,
+        presentedFrames: 0,
+      } as VideoFrameCallbackMetadata;
+      const proceed = await captureFrame(performance.now(), metadata);
+      if (proceed) {
+        scheduleNextFrame();
+      }
+    }, 1000 / Math.max(1, videoConfig.targetFps));
+  }, [captureFrame, videoConfig.targetFps]);
+
+  const cancelFrameLoop = useCallback(() => {
+    if (frameHandleRef.current && videoRef.current?.cancelVideoFrameCallback) {
+      videoRef.current.cancelVideoFrameCallback(frameHandleRef.current);
+    }
+    frameHandleRef.current = undefined;
+    if (fallbackHandleRef.current) {
+      clearTimeout(fallbackHandleRef.current);
+      fallbackHandleRef.current = undefined;
+    }
+  }, []);
+
+  const stopStream = useCallback(() => {
+    cancelFrameLoop();
+    streamRef.current?.getTracks().forEach((track) => track.stop());
+    streamRef.current = null;
+    if (videoRef.current) {
+      videoRef.current.srcObject = null;
+    }
+    trackingActiveRef.current = false;
+    lastTimestamp.current = 0;
+    setTrackingActive(false);
+  }, [cancelFrameLoop, setTrackingActive]);
+
+  const openStream = useCallback(async () => {
+    const video = videoRef.current;
+    if (!video) throw new Error('Video element no disponible');
+    if (!navigator.mediaDevices?.getUserMedia) {
+      throw new Error('getUserMedia no está soportado en este navegador');
+    }
+    const stream = await navigator.mediaDevices.getUserMedia({ video: { deviceId: selectedCamera || undefined } });
+    streamRef.current?.getTracks().forEach((track) => track.stop());
+    streamRef.current = stream;
+    video.srcObject = stream;
+    await video.play();
+  }, [selectedCamera]);
+
+  const startTracking = useCallback(async () => {
+    if (trackingActiveRef.current) return;
+    if (!secureContext) {
+      setTrackingError('La cámara requiere ejecutar la aplicación bajo HTTPS o localhost.');
+      return;
+    }
+    try {
+      setTrackingError(undefined);
+      initWorker();
+      ensureSocket();
+      await openStream();
+      trackingActiveRef.current = true;
+      setTrackingActive(true);
+      scheduleNextFrame();
+    } catch (error) {
+      console.error('No se pudo iniciar el tracking', error);
+      setTrackingError((error as Error).message);
+      stopStream();
+    }
+  }, [ensureSocket, initWorker, openStream, scheduleNextFrame, secureContext, setTrackingActive, setTrackingError, stopStream]);
+
+  const stopTracking = useCallback(() => {
+    stopStream();
+  }, [stopStream]);
+
+  useEffect(() => {
+    ensureSocket();
+  }, [ensureSocket]);
+
+  useEffect(() => {
+    if (!trackingActiveRef.current) return;
+    cancelFrameLoop();
+    openStream()
       .then(() => {
-        video.requestVideoFrameCallback(captureFrame);
+        scheduleNextFrame();
       })
       .catch((error) => {
-        console.error('Camera error', error);
+        console.error('Cambio de cámara fallido', error);
+        setTrackingError((error as Error).message);
       });
-  }, [captureFrame, selectedCamera]);
+  }, [cancelFrameLoop, openStream, scheduleNextFrame, setTrackingError]);
 
   const overlayCallback = useCallback(
     (node: HTMLCanvasElement | null) => {
@@ -135,5 +236,26 @@ export const useTracking = (modelAssetPath: string) => {
     [initWorker],
   );
 
-  return { videoRef, overlayRef: overlayCallback };
+  useEffect(() => {
+    return () => {
+      stopStream();
+      if (workerRef.current) {
+        workerRef.current.terminate();
+        workerRef.current = undefined;
+      }
+      if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
+        wsRef.current.close();
+      }
+    };
+  }, [stopStream]);
+
+  return {
+    videoRef,
+    overlayRef: overlayCallback,
+    startTracking,
+    stopTracking,
+    trackingActive,
+    trackingError,
+    secureContext,
+  };
 };

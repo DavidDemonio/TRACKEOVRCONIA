@@ -12,6 +12,8 @@ type AppState = {
   selectedCamera?: string;
   smoothingStrength: number;
   studioMode: 'standard' | 'studio';
+  trackingActive: boolean;
+  trackingError?: string;
   setVideoConfig: (config: VideoConfig) => void;
   setMetrics: (metrics: FrameMetrics) => void;
   setFrame: (frame: BodyFrame) => void;
@@ -19,6 +21,8 @@ type AppState = {
   selectCamera: (deviceId: string) => void;
   setSmoothing: (value: number) => void;
   toggleStudio: () => void;
+  setTrackingActive: (active: boolean) => void;
+  setTrackingError: (message?: string) => void;
 };
 
 export const useAppStore = create<AppState>((set, get) => ({
@@ -30,6 +34,7 @@ export const useAppStore = create<AppState>((set, get) => ({
   sinks: [],
   smoothingStrength: 0.5,
   studioMode: 'standard',
+  trackingActive: false,
   setVideoConfig: (config) => set({ videoConfig: config }),
   setMetrics: (metrics) => {
     const base = get().videoConfig;
@@ -45,6 +50,9 @@ export const useAppStore = create<AppState>((set, get) => ({
   selectCamera: (deviceId) => set({ selectedCamera: deviceId }),
   setSmoothing: (value) => set({ smoothingStrength: value }),
   toggleStudio: () => set((state) => ({ studioMode: state.studioMode === 'studio' ? 'standard' : 'studio' })),
+  setTrackingActive: (active) =>
+    set((state) => ({ trackingActive: active, trackingError: active ? undefined : state.trackingError })),
+  setTrackingError: (message) => set({ trackingError: message }),
 }));
 
 export const groupSinks = (sinks: Sink[]): { osc: OscSink[]; slime: SlimeVrSink[] } => ({
