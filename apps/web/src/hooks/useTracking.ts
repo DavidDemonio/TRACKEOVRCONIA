@@ -55,10 +55,29 @@ export const useTracking = (modelAssetPath: string) => {
     return window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1';
   }, []);
 
+  const wsUrl = useMemo(() => {
+    if (typeof window === 'undefined') return undefined;
+    const configured = import.meta.env.VITE_WS_URL as string | undefined;
+    if (configured) return configured;
+    const { protocol, hostname, port } = window.location;
+    if (protocol === 'https:') {
+      return `wss://${hostname}${port ? `:${port}` : ''}/ws`;
+    }
+    const fallbackPort = import.meta.env.VITE_SERVER_PORT || '4000';
+    return `ws://${hostname}:${fallbackPort}/ws`;
+  }, []);
+
   const ensureSocket = useCallback(() => {
     if (typeof WebSocket === 'undefined') return;
+    if (!wsUrl) return;
     if (wsRef.current && wsRef.current.readyState <= WebSocket.OPEN) return;
-    wsRef.current = new WebSocket(`${window.location.origin.replace('http', 'ws')}/ws`);
+    try {
+      wsRef.current = new WebSocket(wsUrl);
+    } catch (error) {
+      console.error('No se pudo crear el WebSocket', error);
+      setTrackingError('No se pudo conectar con el servidor de tracking.');
+      return;
+    }
     wsRef.current.addEventListener('open', () => {
       setTrackingError(undefined);
     });
@@ -70,7 +89,7 @@ export const useTracking = (modelAssetPath: string) => {
         window.setTimeout(() => ensureSocket(), 1000);
       }
     });
-  }, [setTrackingError]);
+  }, [setTrackingError, wsUrl]);
 
   const sendFrame = useCallback(
     (frame: BodyFrame, metrics: WorkerPoseMessage['metrics']) => {
@@ -91,9 +110,7 @@ export const useTracking = (modelAssetPath: string) => {
     if (workerRef.current) return;
     if (!overlayRef.current) return;
     if (typeof Worker === 'undefined') return;
-    workerRef.current = new Worker(new URL('../workers/trackingWorker.ts', import.meta.url), {
-      type: 'module',
-    });
+    workerRef.current = new Worker(new URL('../workers/trackingWorker.ts', import.meta.url));
     const offscreen = overlayRef.current?.transferControlToOffscreen?.();
     const message = {
       type: 'init' as const,

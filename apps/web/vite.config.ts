@@ -24,6 +24,9 @@ export default defineConfig({
     strictPort: true,
     https: {},
   },
+  worker: {
+    format: 'iife',
+  },
 });
 
 function previewProxy() {
@@ -33,7 +36,7 @@ function previewProxy() {
       const proxy = httpProxy.createProxyServer({ target: 'http://localhost:4000', ws: true, changeOrigin: true });
       server.middlewares.use((req, res, next) => {
         if (!req.url) return next();
-        if (req.url.startsWith('/api') || req.url.startsWith('/ws')) {
+        if (req.url.startsWith('/api')) {
           proxy.web(req, res, undefined, (error: Error & { code?: string }) => {
             console.error('Proxy error', error);
             next(error as unknown as Error);
