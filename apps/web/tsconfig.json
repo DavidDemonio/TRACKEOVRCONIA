@@ -1,0 +1,12 @@
+{
+  "extends": "../../tsconfig.base.json",
+  "compilerOptions": {
+    "jsx": "react-jsx",
+    "baseUrl": "./src",
+    "types": ["vitest/globals", "vite/client"],
+    "moduleResolution": "Bundler",
+    "skipLibCheck": true
+  },
+  "include": ["src", "vite.config.ts", "vitest.config.ts", "tailwind.config.ts", "postcss.config.js"],
+  "exclude": ["dist"]
+}
