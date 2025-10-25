@@ -124,7 +124,7 @@ self.onmessage = async (event: MessageEvent<WorkerMessage>) => {
       self.postMessage({ type: 'error', message: 'No se pudo inicializar el modelo de pose.' } satisfies WorkerResponse);
       return;
     }
-    if (video.aiSmooth !== 'off' && modelBasePath) {
+    if (video.aiSmooth !== 'off' && modelBasePath && typeof VideoFrame !== 'undefined') {
       interpolator = new AdaptiveFrameInterpolator({
         modelUrl: `${modelBasePath}/rife-lite.onnx`,
         targetFps: video.targetFps,
@@ -144,9 +144,10 @@ self.onmessage = async (event: MessageEvent<WorkerMessage>) => {
   const baseMetrics = resolveMetrics({ cameraFps, effectiveFps: cameraFps });
   let metrics = baseMetrics;
   try {
-    const videoFrame = new VideoFrame(frame, { timestamp });
-    let inferenceFrame: VideoFrame = videoFrame;
-    if (interpolator) {
+    const supportsVideoFrame = typeof VideoFrame !== 'undefined';
+    const videoFrame = supportsVideoFrame ? new VideoFrame(frame, { timestamp }) : frame;
+    let inferenceFrame: typeof videoFrame = videoFrame;
+    if (interpolator && supportsVideoFrame && videoFrame instanceof VideoFrame) {
       try {
         const result = await interpolator.interpolate({ prev: videoFrame, next: videoFrame }, cameraFps);
         metrics = resolveMetrics({
@@ -161,7 +162,7 @@ self.onmessage = async (event: MessageEvent<WorkerMessage>) => {
           inferenceFrame = result.frames[result.frames.length - 1];
         }
         result.frames.forEach((generated) => {
-          if (generated !== inferenceFrame && generated !== videoFrame) {
+          if (generated !== inferenceFrame && generated !== videoFrame && generated instanceof VideoFrame) {
             generated.close();
           }
         });
@@ -181,10 +182,12 @@ self.onmessage = async (event: MessageEvent<WorkerMessage>) => {
       self.postMessage({ type: 'metrics', metrics } satisfies WorkerResponse);
     }
 
-    if (inferenceFrame !== videoFrame) {
+    if (supportsVideoFrame && inferenceFrame !== videoFrame && inferenceFrame instanceof VideoFrame) {
       inferenceFrame.close();
     }
-    videoFrame.close();
+    if (supportsVideoFrame && videoFrame instanceof VideoFrame) {
+      videoFrame.close();
+    }
   } catch (error) {
     console.error('Error procesando frame', error);
     self.postMessage({ type: 'error', message: (error as Error).message } satisfies WorkerResponse);

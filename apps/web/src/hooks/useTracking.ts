@@ -55,6 +55,38 @@ export const useTracking = (modelAssetPath: string) => {
     return window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1';
   }, []);
 
+  const ensureSocket = useCallback(() => {
+    if (typeof WebSocket === 'undefined') return;
+    if (wsRef.current && wsRef.current.readyState <= WebSocket.OPEN) return;
+    wsRef.current = new WebSocket(`${window.location.origin.replace('http', 'ws')}/ws`);
+    wsRef.current.addEventListener('open', () => {
+      setTrackingError(undefined);
+    });
+    wsRef.current.addEventListener('error', () => {
+      setTrackingError('No se pudo conectar con el servidor de tracking.');
+    });
+    wsRef.current.addEventListener('close', () => {
+      if (trackingActiveRef.current) {
+        window.setTimeout(() => ensureSocket(), 1000);
+      }
+    });
+  }, [setTrackingError]);
+
+  const sendFrame = useCallback(
+    (frame: BodyFrame, metrics: WorkerPoseMessage['metrics']) => {
+      ensureSocket();
+      if (!wsRef.current || wsRef.current.readyState !== WebSocket.OPEN) return;
+      const payload = {
+        type: 'tracking',
+        payload: frame,
+        metrics,
+        smoothing,
+      };
+      wsRef.current.send(JSON.stringify(payload));
+    },
+    [ensureSocket, smoothing],
+  );
+
   const initWorker = useCallback(() => {
     if (workerRef.current) return;
     if (!overlayRef.current) return;
@@ -91,27 +123,6 @@ export const useTracking = (modelAssetPath: string) => {
       }
     };
   }, [modelAssetPath, videoConfig, setMetrics, setFrame, sendFrame, setTrackingError]);
-
-  const ensureSocket = useCallback(() => {
-    if (typeof WebSocket === 'undefined') return;
-    if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) return;
-    wsRef.current = new WebSocket(`${window.location.origin.replace('http', 'ws')}/ws`);
-  }, []);
-
-  const sendFrame = useCallback(
-    (frame: BodyFrame, metrics: WorkerPoseMessage['metrics']) => {
-      ensureSocket();
-      if (!wsRef.current || wsRef.current.readyState !== WebSocket.OPEN) return;
-      const payload = {
-        type: 'tracking',
-        payload: frame,
-        metrics,
-        smoothing,
-      };
-      wsRef.current.send(JSON.stringify(payload));
-    },
-    [ensureSocket, smoothing],
-  );
 
   const captureFrame = useCallback(
     async (_now: DOMHighResTimeStamp, metadata: VideoFrameCallbackMetadata) => {
