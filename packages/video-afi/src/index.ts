@@ -16,19 +16,37 @@ export interface AfiResult {
   frames: VideoFrame[];
   multiplier: number;
   latencyMs: number;
+  backend: 'webgpu' | 'webgl' | 'disabled';
 }
 
 export class AdaptiveFrameInterpolator {
-  private session?: InferenceSession;
+  private session?: InferenceSession | null;
   private lastMultiplier = 1;
+  private backend: AfiResult['backend'] = 'disabled';
+  private disabled = false;
 
   constructor(private readonly config: AfiConfig) {}
 
   async ensureSession(): Promise<void> {
-    if (this.session) return;
-    this.session = await InferenceSession.create(this.config.modelUrl, {
-      executionProviders: ['webgpu', 'webgl'],
-    });
+    if (this.session || this.disabled) return;
+    try {
+      this.session = await InferenceSession.create(this.config.modelUrl, {
+        executionProviders: ['webgpu', 'webgl'],
+      });
+      const provider = (this.session as InferenceSession & { executionProvider?: string }).executionProvider;
+      if (provider === 'webgpu' || provider === 'webgl') {
+        this.backend = provider;
+      } else if (typeof navigator !== 'undefined' && 'gpu' in navigator) {
+        this.backend = 'webgpu';
+      } else {
+        this.backend = 'webgl';
+      }
+    } catch (error) {
+      console.warn('AdaptiveFrameInterpolator: disabling due to initialisation error', error);
+      this.session = null;
+      this.disabled = true;
+      this.backend = 'disabled';
+    }
   }
 
   async interpolate({ prev, next }: FramePair, cameraFps: number): Promise<AfiResult> {
@@ -39,11 +57,14 @@ export class AdaptiveFrameInterpolator {
     );
     this.lastMultiplier = multiplier;
 
-    if (multiplier === 1) {
-      return { frames: [prev, next], multiplier: 1, latencyMs: 0 };
+    if (multiplier === 1 || this.disabled) {
+      return { frames: [next], multiplier: 1, latencyMs: 0, backend: this.backend };
     }
 
     await this.ensureSession();
+    if (!this.session) {
+      return { frames: [next], multiplier: 1, latencyMs: 0, backend: this.backend };
+    }
     const start = performance.now();
     const inputs = await Promise.all([prev, next].map((frame) => this.frameToTensor(frame)));
     const results: VideoFrame[] = [];
@@ -62,7 +83,7 @@ export class AdaptiveFrameInterpolator {
     }
 
     const latencyMs = performance.now() - start;
-    return { frames: [prev, ...results, next], multiplier, latencyMs };
+    return { frames: [...results, next], multiplier, latencyMs, backend: this.backend };
   }
 
   private async frameToTensor(frame: VideoFrame): Promise<Tensor> {

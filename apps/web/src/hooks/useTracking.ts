@@ -2,20 +2,32 @@ import { useCallback, useEffect, useMemo, useRef } from 'react';
 import { useAppStore } from '../state/store';
 import type { BodyFrame } from '@trackeovrconia/proto';
 
+interface WorkerMetrics {
+  cameraFps: number;
+  effectiveFps: number;
+  afiMultiplier?: number;
+  srEnabled?: boolean;
+  gpuBackend?: string;
+  addedLatencyMs?: number;
+}
+
 interface WorkerPoseMessage {
   type: 'pose';
   frame: BodyFrame;
-  metrics: {
-    cameraFps: number;
-    effectiveFps: number;
-    afiMultiplier?: number;
-    srEnabled?: boolean;
-    gpuBackend?: string;
-    addedLatencyMs?: number;
-  };
+  metrics: WorkerMetrics;
 }
 
-type WorkerMessages = WorkerPoseMessage;
+interface WorkerMetricsMessage {
+  type: 'metrics';
+  metrics: WorkerMetrics;
+}
+
+interface WorkerErrorMessage {
+  type: 'error';
+  message: string;
+}
+
+type WorkerMessages = WorkerPoseMessage | WorkerMetricsMessage | WorkerErrorMessage;
 
 export const useTracking = (modelAssetPath: string) => {
   const videoRef = useRef<HTMLVideoElement>(null);
@@ -68,9 +80,17 @@ export const useTracking = (modelAssetPath: string) => {
         setMetrics(metrics);
         setFrame(frame);
         sendFrame(frame, metrics);
+        return;
+      }
+      if (event.data.type === 'metrics') {
+        setMetrics(event.data.metrics);
+        return;
+      }
+      if (event.data.type === 'error') {
+        setTrackingError(event.data.message);
       }
     };
-  }, [modelAssetPath, videoConfig, setMetrics, setFrame]);
+  }, [modelAssetPath, videoConfig, setMetrics, setFrame, sendFrame, setTrackingError]);
 
   const ensureSocket = useCallback(() => {
     if (typeof WebSocket === 'undefined') return;

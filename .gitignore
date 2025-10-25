@@ -3,6 +3,7 @@ pnpm-lock.yaml
 coverage
 apps/**/dist
 apps/**/build
+packages/**/dist
 .DS_Store
 .env
 *.log
