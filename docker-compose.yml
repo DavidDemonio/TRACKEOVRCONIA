@@ -1,0 +1,12 @@
+version: '3.9'
+services:
+  trackeovrconia:
+    build: .
+    ports:
+      - '4000:4000'
+    environment:
+      PORT: 4000
+    volumes:
+      - ./config:/app/config
+      - ./sessions:/app/sessions
+      - ./apps/web/public/models:/app/apps/web/public/models

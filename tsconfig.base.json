@@ -1,0 +1,24 @@
+{
+  "compilerOptions": {
+    "target": "ES2022",
+    "module": "ESNext",
+    "moduleResolution": "Node",
+    "baseUrl": ".",
+    "lib": ["ES2023", "DOM"],
+    "resolveJsonModule": true,
+    "esModuleInterop": true,
+    "strict": true,
+    "skipLibCheck": false,
+    "forceConsistentCasingInFileNames": true,
+    "allowJs": false,
+    "noEmit": true,
+    "types": ["node"],
+    "paths": {
+      "@trackeovrconia/proto": ["packages/proto/src/index.ts"],
+      "@trackeovrconia/utils": ["packages/utils/src/index.ts"],
+      "@trackeovrconia/video-afi": ["packages/video-afi/src/index.ts"]
+    }
+  },
+  "include": ["packages", "apps", "tools"],
+  "exclude": ["node_modules", "dist"]
+}
