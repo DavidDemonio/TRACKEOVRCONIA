@@ -1,0 +1,3699 @@
+ (cd "$(git rev-parse --show-toplevel)" && git apply --3way <<'EOF' 
+diff --git a/.eslintrc.cjs b/.eslintrc.cjs
+new file mode 100644
+index 0000000000000000000000000000000000000000..ee43e2d3db6e25556720ab42e7b12604b5a733b5
+--- /dev/null
++++ b/.eslintrc.cjs
+@@ -0,0 +1,12 @@
++module.exports = {
++  root: true,
++  parser: '@typescript-eslint/parser',
++  plugins: ['@typescript-eslint'],
++  extends: ['eslint:recommended', 'plugin:@typescript-eslint/recommended'],
++  env: {
++    node: true,
++    browser: true,
++    es2022: true,
++  },
++  ignorePatterns: ['dist', 'coverage'],
++};
+diff --git a/.gitignore b/.gitignore
+new file mode 100644
+index 0000000000000000000000000000000000000000..e71a15b29bf70711ec7a32c984513d63fe976ac0
+--- /dev/null
++++ b/.gitignore
+@@ -0,0 +1,11 @@
++node_modules
++pnpm-lock.yaml
++coverage
++apps/**/dist
++apps/**/build
++packages/**/dist
++/.cache
++*.tsbuildinfo
++.DS_Store
++.env
++*.log
+diff --git a/Dockerfile b/Dockerfile
+new file mode 100644
+index 0000000000000000000000000000000000000000..fdfc3bc09773f02254a6c8d6576470bccd2ef630
+--- /dev/null
++++ b/Dockerfile
+@@ -0,0 +1,36 @@
++# syntax=docker/dockerfile:1
++
++FROM node:20-bullseye AS base
++WORKDIR /app
++ENV PNPM_HOME=/root/.local/share/pnpm
++ENV PATH=$PNPM_HOME:$PATH
++RUN corepack enable
++
++FROM base AS deps
++COPY pnpm-lock.yaml package.json pnpm-workspace.yaml tsconfig.base.json .eslintrc.cjs ./
++COPY apps/server/package.json apps/server/tsconfig.json apps/server/tsconfig.build.json apps/server/vitest.config.ts apps/server/ ./apps/server/
++COPY apps/web/package.json apps/web/tsconfig.json apps/web/vite.config.ts apps/web/vitest.config.ts apps/web/tailwind.config.ts apps/web/postcss.config.js ./apps/web/
++COPY packages ./packages
++COPY tools/package.json ./tools/
++RUN pnpm install --frozen-lockfile
++
++FROM deps AS build
++COPY . .
++RUN pnpm build
++
++FROM node:20-bullseye AS runtime
++WORKDIR /app
++ENV NODE_ENV=production
++ENV PNPM_HOME=/root/.local/share/pnpm
++ENV PATH=$PNPM_HOME:$PATH
++RUN corepack enable
++COPY --from=deps /app/pnpm-lock.yaml ./
++COPY package.json pnpm-workspace.yaml tsconfig.base.json .eslintrc.cjs ./
++COPY apps/server/package.json ./apps/server/package.json
++COPY apps/web/package.json ./apps/web/package.json
++COPY tools ./tools
++RUN pnpm install --filter server --prod --frozen-lockfile
++COPY --from=build /app/apps/server/dist ./apps/server/dist
++COPY --from=build /app/apps/web/dist ./apps/web/dist
++EXPOSE 4000
++CMD ["node", "apps/server/dist/index.js"]
+diff --git a/LICENSE b/LICENSE
+new file mode 100644
+index 0000000000000000000000000000000000000000..b22e253ccac1ac87caa2b0d4838c5a8246fa9f74
+--- /dev/null
++++ b/LICENSE
+@@ -0,0 +1,21 @@
++MIT License
++
++Copyright (c) 2024 Trackeovrconia
++
++Permission is hereby granted, free of charge, to any person obtaining a copy
++of this software and associated documentation files (the "Software"), to deal
++in the Software without restriction, including without limitation the rights
++to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
++copies of the Software, and to permit persons to whom the Software is
++furnished to do so, subject to the following conditions:
++
++The above copyright notice and this permission notice shall be included in all
++copies or substantial portions of the Software.
++
++THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
++IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
++FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
++AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
++LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
++OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
++SOFTWARE.
+diff --git a/README.md b/README.md
+index 0eeab049d1a694ada2dd44efbce2dbda5c2b00f5..29dc1906a77a99f8137a3514e6e6abbeb99ecb9d 100644
+--- a/README.md
++++ b/README.md
+@@ -1 +1,133 @@
+-# TRACKEOVRCONIA
++# Trackeovrconia
++
++Aplicación full-body tracking con MediaPipe, AI Smooth FPS, salida OSC y adaptador SlimeVR. Incluye servidor Node.js (Express + ws), cliente React (Vite + Tailwind), filtros de suavizado One Euro / Kalman y módulo AFI WebGPU.
++
++## Características principales
++
++- **Cliente Web (Vite + React + Tailwind)**
++  - Selector de cámara y vista previa con overlay BlazePose.
++  - Calibración visual, heatmap y panel de métricas en vivo (FPS, latencia, backend GPU, AI Smooth y SR).
++  - Control de suavizado One Euro/Kalman, modo Studio con vista 3D (Three.js) y gestión de endpoints OSC/SlimeVR.
++  - AI Smooth FPS con interpolación AFI (RIFE-lite) y super-resolución opcional (ESRGAN-lite). Fallback a WebGL o servidor.
++  - Grabación/reproducción (NDJSON) vía API y exportación de pose.
++
++- **Servidor Node.js (TypeScript + Express + ws)**
++  - Normaliza frames, aplica filtros (One Euro/Kalman) y re-emite vía OSC (namespace configurable) y adaptador SlimeVR.
++  - API REST: configuración, sinks (OSC/SlimeVR), sesiones de grabación, health y configuración de video.
++  - WebSocket de tracking (cliente→server) y canal monitor (server→diagnóstico).
++  - Logs estructurados (pino), métricas Prometheus (`/metrics`), configuración persistente en `config/config.json`.
++
++- **Paquetes reutilizables** (`packages/`)
++  - `@trackeovrconia/proto`: tipos y esquemas Zod (BodyFrame, sinks, config).
++  - `@trackeovrconia/utils`: filtros One Euro / Kalman y utilidades de métricas.
++  - `@trackeovrconia/video-afi`: wrapper AFI para interpolación WebGPU/WebGL.
++
++- **Extras**
++  - `tools/osc-listener.js` para depurar tráfico OSC.
++  - Dockerfile multi-stage + `docker-compose.yml`.
++  - Tests con Vitest (server, utils, UI) y linting con ESLint.
++
++## Estructura
++
++```
++apps/
++  server/   # Express + ws + OSC + SlimeVR
++  web/      # Vite + React + Tailwind + Three.js
++packages/
++  proto/    # Zod schemas & tipos compartidos
++  utils/    # Filtros One Euro / Kalman + helpers
++  video-afi/# Wrapper AFI onnxruntime-web
++tools/
++  osc-listener.js
++```
++
++## Requisitos previos
++
++- Node.js 20+
++- pnpm 8+
++- GPU compatible WebGL/WebGPU (cliente) para AFI/SR
++- Modelos en `apps/web/public/models/` preparados automáticamente por el script `apps/web/scripts/sync-mediapipe-assets.mjs`:
++  - Al ejecutar `pnpm install`, `npm install` o cualquier build (`pnpm build`, `pnpm start`) se copian los artefactos de MediaPipe y se descargan los modelos ONNX necesarios (`pose_landmarker_full.task`, `rife-lite.onnx`, `esrgan-lite.onnx`).
++  - Si fallase la descarga automática (por ejemplo, sin conexión), el cliente usará los CDN de respaldo en tiempo de ejecución y el script mostrará instrucciones en consola.
++  - Para dejar el repositorio sin binarios antes de un commit o distribución usa `pnpm clean:models`, que elimina todo lo descargado conservando solo los archivos de control.
++
++## Comandos pnpm
++
++```bash
++pnpm install       # instala dependencias
++pnpm dev           # levanta server (4000) + web (5173)
++pnpm build         # compila server + web
++pnpm start         # compila y arranca server HTTPS (4000) sirviendo API + UI
++pnpm lint          # ESLint en todos los paquetes
++pnpm test          # Vitest (packages, server, web)
++```
++
++### Desarrollo
++
++- `pnpm --filter server dev` para server en modo watch (tsx).
++- `pnpm --filter web dev` para UI (Vite hot reload).
++
++## Docker
++
++Construye la imagen multi-stage:
++
++```bash
++docker build -t trackeovrconia .
++docker compose up
++```
++
++La UI + API quedan disponibles en `https://localhost:4000` (certificado auto-firmado generado en runtime).
++Al primer acceso acepta el certificado para que Chrome permita la cámara.
++
++Variables `.env` relevantes (pueden definirse en `docker-compose.yml` o `.env`):
++
++- `PORT` (default 4000)
++- `HOST` (bind address)
++
++## API REST
++
++| Método | Ruta                 | Descripción |
++|--------|----------------------|-------------|
++| GET    | `/api/health`        | Estado del servidor |
++| GET    | `/api/config`        | Configuración completa |
++| PUT    | `/api/config`        | Actualiza configuración (parcial) |
++| GET    | `/api/config/video`  | Configuración video/AI Smooth |
++| PUT    | `/api/config/video`  | Actualiza video ({ targetFps, aiSmooth, sr, serverAfiUrl? }) |
++| GET    | `/api/sinks`         | Listado de sinks OSC/SlimeVR |
++| POST   | `/api/sinks`         | Añade sink (OSC o SlimeVR) |
++| DELETE | `/api/sinks/:id`     | Elimina sink |
++| POST   | `/api/sessions`      | `{ action: 'start' | 'stop' }` grabación NDJSON |
++
++## WebSocket
++
++- `/ws` (tracking): el cliente envía `{ type: 'tracking', payload: BodyFrame, metrics, smoothing }`.
++- `/ws?mode=monitor`: receptores de monitor reciben `{ type: 'monitor', frame, metrics }`.
++
++## OSC & SlimeVR
++
++- OSC UDP namespace: `/body/<joint>/{pos|rotQuat|conf}`
++- SlimeVR adapter: envía paquetes JSON `{ trackers: [...] }` vía UDP al servidor SlimeVR (configurable host/puerto/perfil).
++
++## Grabación y replay
++
++- `POST /api/sessions { action: 'start' }` crea archivo `sessions/<uuid>.ndjson`.
++- `POST /api/sessions { action: 'stop' }` finaliza.
++
++## Tests
++
++- `pnpm --filter @trackeovrconia/utils test` (filtros + métricas)
++- `pnpm --filter server test`
++- `pnpm --filter web test`
++
++## Troubleshooting
++
++- Si no hay GPU WebGPU, el cliente cae a WebGL o modo directo sin AFI.
++- Chrome/Edge requieren contexto seguro (HTTPS o localhost) para exponer cámaras. `pnpm start` sirve todo sobre `https://<host>:4000` (auto-firmado). Acepta el certificado y recarga.
++- Si ves `No se pudo conectar con el servidor de tracking`, asegúrate de que `node apps/server/dist/index.js` está activo y que aceptaste el certificado HTTPS/WSS (se genera en `.cache/https`). Puedes forzar HTTP exportando `DISABLE_HTTPS=true` (sólo para pruebas sin cámara).
++- Si la red bloquea las descargas automáticas de modelos, ejecuta `node apps/web/scripts/sync-mediapipe-assets.mjs` manualmente tras conectarte a Internet.
++- Usa `tools/osc-listener.js 9000` para verificar salida OSC.
++- Configuración persistente en `config/config.json` (se crea automáticamente).
++
++## Licencia
++
++[MIT](LICENSE)
+diff --git a/apps/server/package.json b/apps/server/package.json
+new file mode 100644
+index 0000000000000000000000000000000000000000..62a34ca09bc0d4ffb2ecedea2e14fb55d56c452d
+--- /dev/null
++++ b/apps/server/package.json
+@@ -0,0 +1,45 @@
++{
++  "name": "server",
++  "version": "0.1.0",
++  "type": "module",
++  "main": "dist/index.js",
++  "types": "dist/index.d.ts",
++  "scripts": {
++    "dev": "tsx watch src/index.ts",
++    "build": "tsc -p tsconfig.build.json",
++    "start": "node dist/index.js",
++    "lint": "eslint src --ext .ts",
++    "test": "vitest run",
++    "format": "prettier --check \"src/**/*.ts\""
++  },
++  "dependencies": {
++    "@msgpack/msgpack": "^3.0.0",
++    "@trackeovrconia/proto": "workspace:*",
++    "@trackeovrconia/utils": "workspace:*",
++    "cors": "^2.8.5",
++    "dotenv": "^16.3.1",
++    "express": "^4.19.2",
++    "osc-min": "^1.1.2",
++    "pino": "^8.15.0",
++    "pino-http": "^8.6.0",
++    "selfsigned": "^2.1.1",
++    "zod": "^3.23.8",
++    "prom-client": "^15.0.0",
++    "uuid": "^9.0.1",
++    "ws": "^8.14.2"
++  },
++  "devDependencies": {
++    "@types/cors": "^2.8.17",
++    "@types/express": "^4.17.21",
++    "@types/node": "^20.11.0",
++    "@types/ws": "^8.5.9",
++    "@types/selfsigned": "^2.1.0",
++    "@typescript-eslint/eslint-plugin": "^6.17.0",
++    "@typescript-eslint/parser": "^6.17.0",
++    "eslint": "^8.56.0",
++    "prettier": "^3.1.1",
++    "tsx": "^4.7.0",
++    "typescript": "^5.3.3",
++    "vitest": "^1.2.2"
++  }
++}
+diff --git a/apps/server/src/api/router.ts b/apps/server/src/api/router.ts
+new file mode 100644
+index 0000000000000000000000000000000000000000..f1c06ed07b9dfa14c9571c082947996e51cce1e8
+--- /dev/null
++++ b/apps/server/src/api/router.ts
+@@ -0,0 +1,107 @@
++import { Router } from 'express';
++import { z } from 'zod';
++import { configStore } from '../config/store.js';
++import { sinkBroadcaster } from '../services/broadcaster.js';
++import { sessionRecorder } from '../services/session-recorder.js';
++import { serverConfigSchema, sinkSchema } from '@trackeovrconia/proto';
++import type { TrackingServer } from '../ws/server.js';
++
++const createRouter = (tracking: TrackingServer): Router => {
++  const router = Router();
++
++  router.get('/config', (_req, res) => {
++    res.json(configStore.getServerConfig());
++  });
++
++  router.put('/config', (req, res, next) => {
++    try {
++      const payload = serverConfigSchema.partial().parse(req.body);
++      configStore
++        .updateServerConfig(payload)
++        .then((config) => {
++          sinkBroadcaster.updateSinks(config.sinks);
++          tracking.updateConfig();
++          res.json(config);
++        })
++        .catch(next);
++    } catch (error) {
++      next(error);
++    }
++  });
++
++  router.get('/config/video', (_req, res) => {
++    res.json(configStore.getServerConfig().video);
++  });
++
++  router.put('/config/video', (req, res, next) => {
++    const schema = serverConfigSchema.shape.video.partial();
++    try {
++      const payload = schema.parse(req.body);
++      configStore
++        .updateServerConfig({ video: { ...configStore.getServerConfig().video, ...payload } })
++        .then((config) => {
++          tracking.updateConfig();
++          res.json(config.video);
++        })
++        .catch(next);
++    } catch (error) {
++      next(error);
++    }
++  });
++
++  router.get('/sinks', (_req, res) => {
++    res.json(configStore.listSinks());
++  });
++
++  router.post('/sinks', (req, res, next) => {
++    try {
++      const payload = sinkSchema.parse(req.body);
++      const sinks = [...configStore.listSinks(), payload];
++      configStore
++        .setSinks(sinks)
++        .then((updated) => {
++          sinkBroadcaster.updateSinks(updated);
++          res.status(201).json(payload);
++        })
++        .catch(next);
++    } catch (error) {
++      next(error);
++    }
++  });
++
++  router.delete('/sinks/:id', (req, res, next) => {
++    const { id } = req.params;
++    const sinks = configStore.listSinks().filter((sink) => sink.id !== id);
++    configStore
++      .setSinks(sinks)
++      .then((updated) => {
++        sinkBroadcaster.updateSinks(updated);
++        res.status(204).send();
++      })
++      .catch(next);
++  });
++
++  router.post('/sessions', async (req, res, next) => {
++    try {
++      const actionSchema = z.object({ action: z.enum(['start', 'stop']) });
++      const { action } = actionSchema.parse(req.body);
++      if (action === 'start') {
++        const sessionId = await sessionRecorder.start();
++        res.json({ sessionId });
++      } else {
++        sessionRecorder.stop();
++        res.status(204).send();
++      }
++    } catch (error) {
++      next(error);
++    }
++  });
++
++  router.get('/health', (_req, res) => {
++    res.json({ status: 'ok' });
++  });
++
++  return router;
++};
++
++export default createRouter;
+diff --git a/apps/server/src/config/store.ts b/apps/server/src/config/store.ts
+new file mode 100644
+index 0000000000000000000000000000000000000000..e27e2d71eec491eefb90dc0ce61876504d61ae5f
+--- /dev/null
++++ b/apps/server/src/config/store.ts
+@@ -0,0 +1,62 @@
++import { promises as fs } from 'fs';
++import path from 'path';
++import { defaultConfig, configFileSchema, ConfigFile, ServerConfig, sinkSchema, Sink } from '@trackeovrconia/proto';
++import pino from 'pino';
++
++const CONFIG_PATH = path.resolve(process.cwd(), 'config/config.json');
++
++const logger = pino({ name: 'config-store' });
++
++export class ConfigStore {
++  private data: ConfigFile = { server: defaultConfig, slimevr: { trackers: {} } };
++
++  constructor(private readonly filePath = CONFIG_PATH) {}
++
++  async load(): Promise<void> {
++    try {
++      const raw = await fs.readFile(this.filePath, 'utf-8');
++      this.data = configFileSchema.parse(JSON.parse(raw));
++      logger.info({ path: this.filePath }, 'Loaded configuration file');
++    } catch (error) {
++      logger.warn({ error }, 'Using default configuration');
++      await this.persist();
++    }
++  }
++
++  private async ensureDir(): Promise<void> {
++    await fs.mkdir(path.dirname(this.filePath), { recursive: true });
++  }
++
++  private async persist(): Promise<void> {
++    await this.ensureDir();
++    await fs.writeFile(this.filePath, JSON.stringify(this.data, null, 2));
++  }
++
++  getServerConfig(): ServerConfig {
++    return this.data.server;
++  }
++
++  async updateServerConfig(update: Partial<ServerConfig>): Promise<ServerConfig> {
++    const merged = { ...this.data.server, ...update, video: { ...this.data.server.video, ...update.video } };
++    this.data.server = configFileSchema.shape.server.parse(merged);
++    await this.persist();
++    return this.data.server;
++  }
++
++  listSinks(): Sink[] {
++    return this.data.server.sinks;
++  }
++
++  async setSinks(sinks: Sink[]): Promise<Sink[]> {
++    this.data.server.sinks = sinks.map((sink) => sinkSchema.parse(sink));
++    await this.persist();
++    return this.listSinks();
++  }
++
++  async saveSlimeVrProfile(profileId: string, data: ConfigFile['slimevr']['trackers'][string]): Promise<void> {
++    this.data.slimevr.trackers[profileId] = data;
++    await this.persist();
++  }
++}
++
++export const configStore = new ConfigStore();
+diff --git a/apps/server/src/index.ts b/apps/server/src/index.ts
+new file mode 100644
+index 0000000000000000000000000000000000000000..e6a8b5fc73b4bf7796ff5580c3e30dea2c751aac
+--- /dev/null
++++ b/apps/server/src/index.ts
+@@ -0,0 +1,76 @@
++import http from 'http';
++import https from 'https';
++import express from 'express';
++import cors from 'cors';
++import dotenv from 'dotenv';
++import pino from 'pino';
++import pinoHttp from 'pino-http';
++import { collectDefaultMetrics, Registry } from 'prom-client';
++import path from 'path';
++import fs from 'fs';
++import createRouter from './api/router.js';
++import { configStore } from './config/store.js';
++import { sinkBroadcaster } from './services/broadcaster.js';
++import { trackingServerFactory } from './ws/server.js';
++import { resolveCertificate } from './utils/certificates.js';
++
++dotenv.config();
++
++const logger = pino({ name: 'server' });
++const registry = new Registry();
++collectDefaultMetrics({ register: registry });
++
++async function bootstrap(): Promise<void> {
++  await configStore.load();
++  sinkBroadcaster.updateSinks(configStore.listSinks());
++
++  const app = express();
++  app.use(cors());
++  app.use(express.json({ limit: '2mb' }));
++  app.use(pinoHttp({ logger }));
++
++  const httpsEnabled = process.env.DISABLE_HTTPS === 'true' ? false : true;
++  let server: http.Server | https.Server;
++  let protocol: 'http' | 'https' = 'http';
++  if (httpsEnabled) {
++    try {
++      const pair = await resolveCertificate(logger);
++      server = https.createServer({ key: pair.key, cert: pair.cert }, app);
++      protocol = 'https';
++    } catch (error) {
++      logger.error({ error }, 'Falling back to HTTP server because HTTPS setup failed');
++      server = http.createServer(app);
++    }
++  } else {
++    server = http.createServer(app);
++  }
++  const ws = trackingServerFactory(server);
++  app.use('/api', createRouter(ws));
++  const staticDir = path.resolve(process.cwd(), 'apps/web/dist');
++  if (fs.existsSync(staticDir)) {
++    app.use(express.static(staticDir));
++    app.get('*', (_req, res) => {
++      res.sendFile(path.join(staticDir, 'index.html'));
++    });
++  }
++  app.get('/metrics', async (_req, res) => {
++    res.set('Content-Type', registry.contentType);
++    res.send(await registry.metrics());
++  });
++
++  const port = Number(process.env.PORT ?? 4000);
++  app.use((err: Error, _req: express.Request, res: express.Response, _next: express.NextFunction) => {
++    logger.error({ err }, 'Unhandled error');
++    res.status(400).json({ error: err.message });
++  });
++
++  server.listen(port, () => {
++    logger.info({ port, protocol }, 'Server listening');
++    ws.updateConfig();
++  });
++}
++
++bootstrap().catch((error) => {
++  logger.error({ error }, 'Failed to bootstrap server');
++  process.exit(1);
++});
+diff --git a/apps/server/src/services/broadcaster.ts b/apps/server/src/services/broadcaster.ts
+new file mode 100644
+index 0000000000000000000000000000000000000000..93bb8cf6644e9e2dff4652c0e5b8e49722c22ccf
+--- /dev/null
++++ b/apps/server/src/services/broadcaster.ts
+@@ -0,0 +1,24 @@
++import { BodyFrame, Sink } from '@trackeovrconia/proto';
++import { OscPublisher } from '../sinks/osc.js';
++import { SlimeVrAdapter } from '../slimevr/adapter.js';
++
++export class SinkBroadcaster {
++  private oscillators = new Map<string, OscPublisher>();
++  private slimeAdapters = new Map<string, SlimeVrAdapter>();
++
++  updateSinks(sinks: Sink[]): void {
++    const osc = sinks.filter((sink) => sink.type === 'osc');
++    const slime = sinks.filter((sink) => sink.type === 'slimevr');
++    this.oscillators.clear();
++    this.slimeAdapters.clear();
++    osc.forEach((sink) => this.oscillators.set(sink.id, new OscPublisher(sink)));
++    slime.forEach((sink) => this.slimeAdapters.set(sink.id, new SlimeVrAdapter(sink)));
++  }
++
++  publish(frame: BodyFrame): void {
++    this.oscillators.forEach((publisher) => publisher.publish(frame));
++    this.slimeAdapters.forEach((adapter) => adapter.publish(frame));
++  }
++}
++
++export const sinkBroadcaster = new SinkBroadcaster();
+diff --git a/apps/server/src/services/normalizer.ts b/apps/server/src/services/normalizer.ts
+new file mode 100644
+index 0000000000000000000000000000000000000000..5b312b4f598ed730f375567de5da4e06e5cca701
+--- /dev/null
++++ b/apps/server/src/services/normalizer.ts
+@@ -0,0 +1,58 @@
++import { BodyFrame, JointName, ServerConfig } from '@trackeovrconia/proto';
++import { KalmanFilter, OneEuroFilter } from '@trackeovrconia/utils';
++
++export class FrameNormalizer {
++  private oneEuro?: OneEuroFilter;
++  private kalman?: KalmanFilter;
++  private config: ServerConfig;
++
++  constructor(config: ServerConfig) {
++    this.config = config;
++    this.updateConfig(config);
++  }
++
++  updateConfig(config: ServerConfig): void {
++    this.config = config;
++    if (config.smoothing.filter === 'one-euro') {
++      this.oneEuro = new OneEuroFilter(config.video.targetFps, {
++        beta: config.smoothing.beta,
++        minCutoff: config.smoothing.minCutoff,
++      });
++      this.kalman = undefined;
++    } else {
++      this.kalman = new KalmanFilter({ r: config.smoothing.r, q: config.smoothing.q });
++      this.oneEuro = undefined;
++    }
++  }
++
++  normalize(frame: BodyFrame): BodyFrame {
++    const joints: BodyFrame['joints'] = {};
++    (Object.keys(frame.joints) as JointName[]).forEach((joint) => {
++      const data = frame.joints[joint];
++      if (!data) return;
++      const timestamp = frame.timestamp ?? Date.now();
++      const smoothedPos = data.pos
++        ? this.applyFilter(`${joint}-pos`, data.pos, timestamp)
++        : undefined;
++      const smoothedRot = data.rotQuat
++        ? this.applyFilter(`${joint}-rot`, data.rotQuat, timestamp)
++        : undefined;
++      joints[joint] = {
++        pos: smoothedPos ?? data.pos,
++        rotQuat: smoothedRot ?? data.rotQuat,
++        conf: data.conf,
++      };
++    });
++    return { ...frame, joints };
++  }
++
++  private applyFilter<T extends number[]>(id: string, values: T, timestamp: number): T | undefined {
++    if (this.oneEuro) {
++      return this.oneEuro.filterVector(id, values, timestamp) as T;
++    }
++    if (this.kalman) {
++      return this.kalman.filterVector(id, values) as T;
++    }
++    return undefined;
++  }
++}
+diff --git a/apps/server/src/services/session-recorder.ts b/apps/server/src/services/session-recorder.ts
+new file mode 100644
+index 0000000000000000000000000000000000000000..1d011f062638f9ea96c866fd1a365b8428c6a747
+--- /dev/null
++++ b/apps/server/src/services/session-recorder.ts
+@@ -0,0 +1,38 @@
++import fs, { createWriteStream, WriteStream } from 'fs';
++import path from 'path';
++import { BodyFrame } from '@trackeovrconia/proto';
++import { randomUUID } from 'crypto';
++
++export class SessionRecorder {
++  private stream?: WriteStream;
++  private startedAt?: number;
++  private sessionId?: string;
++
++  async start(): Promise<string> {
++    if (this.stream) {
++      throw new Error('A session is already active');
++    }
++    this.sessionId = randomUUID();
++    const dir = path.resolve(process.cwd(), 'sessions');
++    await fs.promises.mkdir(dir, { recursive: true });
++    const file = path.join(dir, `${this.sessionId}.ndjson`);
++    this.stream = createWriteStream(file, { flags: 'a' });
++    this.startedAt = Date.now();
++    return this.sessionId;
++  }
++
++  stop(): void {
++    this.stream?.end();
++    this.stream = undefined;
++    this.startedAt = undefined;
++    this.sessionId = undefined;
++  }
++
++  record(frame: BodyFrame): void {
++    if (!this.stream) return;
++    const payload = JSON.stringify({ ...frame, relative: this.startedAt ? frame.timestamp - this.startedAt : 0 });
++    this.stream.write(`${payload}\n`);
++  }
++}
++
++export const sessionRecorder = new SessionRecorder();
+diff --git a/apps/server/src/sinks/osc.ts b/apps/server/src/sinks/osc.ts
+new file mode 100644
+index 0000000000000000000000000000000000000000..7907da503c65a92aba8c55d7d79f6b5d88c45685
+--- /dev/null
++++ b/apps/server/src/sinks/osc.ts
+@@ -0,0 +1,38 @@
++import dgram from 'dgram';
++import osc from 'osc-min';
++import { BodyFrame, JointName, OscSink } from '@trackeovrconia/proto';
++import pino from 'pino';
++
++const logger = pino({ name: 'osc-sink' });
++
++export class OscPublisher {
++  private socket = dgram.createSocket('udp4');
++
++  constructor(private readonly sink: OscSink) {}
++
++  publish(frame: BodyFrame): void {
++    const jointEntries = Object.entries(frame.joints) as [JointName, BodyFrame['joints'][JointName]][];
++    jointEntries.forEach(([joint, data]) => {
++      if (!data) return;
++      const namespace = `${this.sink.namespace}/${joint}`;
++      if (data.pos) {
++        this.send(`${namespace}/pos`, data.pos);
++      }
++      if (data.rotQuat) {
++        this.send(`${namespace}/rotQuat`, data.rotQuat);
++      }
++      if (data.conf !== undefined) {
++        this.send(`${namespace}/conf`, [data.conf]);
++      }
++    });
++  }
++
++  private send(address: string, args: unknown[]): void {
++    try {
++      const buf = osc.toBuffer({ address, args });
++      this.socket.send(buf, this.sink.port, this.sink.host);
++    } catch (error) {
++      logger.error({ error }, 'Failed to send OSC packet');
++    }
++  }
++}
+diff --git a/apps/server/src/slimevr/adapter.ts b/apps/server/src/slimevr/adapter.ts
+new file mode 100644
+index 0000000000000000000000000000000000000000..01b51c561108a740c617719a7d4a1d071b23bbde
+--- /dev/null
++++ b/apps/server/src/slimevr/adapter.ts
+@@ -0,0 +1,42 @@
++import dgram from 'dgram';
++import { BodyFrame, jointNames, SlimeVrSink } from '@trackeovrconia/proto';
++import pino from 'pino';
++
++const logger = pino({ name: 'slimevr-adapter' });
++
++type TrackerPacket = {
++  trackerId: string;
++  joint: string;
++  position?: number[];
++  rotation?: number[];
++  confidence?: number;
++};
++
++export class SlimeVrAdapter {
++  private socket = dgram.createSocket('udp4');
++
++  constructor(private readonly sink: SlimeVrSink) {}
++
++  publish(frame: BodyFrame): void {
++    const packets: TrackerPacket[] = [];
++    jointNames.forEach((joint) => {
++      const data = frame.joints[joint];
++      if (!data) return;
++      packets.push({
++        trackerId: `${this.sink.profileId}:${joint}`,
++        joint,
++        position: data.pos,
++        rotation: data.rotQuat,
++        confidence: data.conf,
++      });
++    });
++
++    if (!packets.length) return;
++    const payload = Buffer.from(JSON.stringify({ type: 'trackers', trackers: packets }));
++    this.socket.send(payload, this.sink.port, this.sink.host, (error) => {
++      if (error) {
++        logger.error({ error }, 'Failed to send slimevr packet');
++      }
++    });
++  }
++}
+diff --git a/apps/server/src/types/osc-min.d.ts b/apps/server/src/types/osc-min.d.ts
+new file mode 100644
+index 0000000000000000000000000000000000000000..2c9bbaf426fe4926ddfbb207a0f5403ca05554b0
+--- /dev/null
++++ b/apps/server/src/types/osc-min.d.ts
+@@ -0,0 +1,13 @@
++declare module 'osc-min' {
++  export interface OscArgument {
++    type: string;
++    value: unknown;
++  }
++
++  export interface OscMessage {
++    address: string;
++    args?: OscArgument[] | unknown[];
++  }
++
++  export function toBuffer(message: OscMessage): Buffer;
++}
+diff --git a/apps/server/src/utils/certificates.ts b/apps/server/src/utils/certificates.ts
+new file mode 100644
+index 0000000000000000000000000000000000000000..fc63cde638c8d3697170b854713bfced756e92c6
+--- /dev/null
++++ b/apps/server/src/utils/certificates.ts
+@@ -0,0 +1,76 @@
++import { promises as fs } from 'fs';
++import path from 'path';
++import selfsigned from 'selfsigned';
++import type { Logger } from 'pino';
++
++interface CertificatePair {
++  key: string;
++  cert: string;
++}
++
++const cacheDir = path.resolve(process.cwd(), '.cache', 'https');
++const devKeyPath = path.join(cacheDir, 'dev-key.pem');
++const devCertPath = path.join(cacheDir, 'dev-cert.pem');
++
++async function ensureDir(dir: string): Promise<void> {
++  await fs.mkdir(dir, { recursive: true });
++}
++
++async function readPair(keyPath: string, certPath: string): Promise<CertificatePair> {
++  const [key, cert] = await Promise.all([fs.readFile(keyPath, 'utf8'), fs.readFile(certPath, 'utf8')]);
++  return { key, cert };
++}
++
++async function loadFromEnv(logger?: Logger): Promise<CertificatePair | undefined> {
++  const keyPath = process.env.SSL_KEY_PATH;
++  const certPath = process.env.SSL_CERT_PATH;
++  if (!keyPath || !certPath) {
++    return undefined;
++  }
++  try {
++    const pair = await readPair(keyPath, certPath);
++    logger?.info?.({ keyPath, certPath }, 'Loaded SSL certificate from environment paths');
++    return pair;
++  } catch (error) {
++    logger?.error?.({ error, keyPath, certPath }, 'Failed to read SSL certificate files defined via environment variables');
++    throw error;
++  }
++}
++
++async function loadCached(logger?: Logger): Promise<CertificatePair | undefined> {
++  try {
++    const pair = await readPair(devKeyPath, devCertPath);
++    logger?.debug?.({ devKeyPath, devCertPath }, 'Loaded cached self-signed certificate');
++    return pair;
++  } catch (error) {
++    if ((error as NodeJS.ErrnoException).code !== 'ENOENT') {
++      logger?.warn?.({ error }, 'Could not load cached certificate, generating a new one');
++    }
++    return undefined;
++  }
++}
++
++async function generateSelfSigned(logger?: Logger): Promise<CertificatePair> {
++  await ensureDir(cacheDir);
++  const attributes = [{ name: 'commonName', value: 'trackeovrconia.local' }];
++  const { private: key, cert } = selfsigned.generate(attributes, {
++    days: 365,
++    keySize: 2048,
++    algorithm: 'sha256',
++  });
++  await Promise.all([fs.writeFile(devKeyPath, key), fs.writeFile(devCertPath, cert)]);
++  logger?.info?.({ devKeyPath, devCertPath }, 'Generated new self-signed development certificate');
++  return { key, cert };
++}
++
++export async function resolveCertificate(logger?: Logger): Promise<CertificatePair> {
++  const envPair = await loadFromEnv(logger);
++  if (envPair) {
++    return envPair;
++  }
++  const cached = await loadCached(logger);
++  if (cached) {
++    return cached;
++  }
++  return generateSelfSigned(logger);
++}
+diff --git a/apps/server/src/ws/server.ts b/apps/server/src/ws/server.ts
+new file mode 100644
+index 0000000000000000000000000000000000000000..36ca151f6be530e5d55617916019d7139ff0ec3f
+--- /dev/null
++++ b/apps/server/src/ws/server.ts
+@@ -0,0 +1,77 @@
++import { WebSocketServer, WebSocket, RawData } from 'ws';
++import type { Server as HttpServer } from 'http';
++import type { Server as HttpsServer } from 'https';
++import { z } from 'zod';
++import { bodyFrameSchema, monitorMessageSchema } from '@trackeovrconia/proto';
++import { configStore } from '../config/store.js';
++import { FrameNormalizer } from '../services/normalizer.js';
++import { sinkBroadcaster } from '../services/broadcaster.js';
++import { sessionRecorder } from '../services/session-recorder.js';
++
++const messageSchema = z.object({
++  type: z.literal('tracking'),
++  payload: bodyFrameSchema,
++  metrics: monitorMessageSchema.partial().optional(),
++});
++
++type TrackingEnvelope = z.infer<typeof messageSchema>;
++
++type AnyServer = HttpServer | HttpsServer;
++
++export class TrackingServer {
++  private readonly wss: WebSocketServer;
++  private readonly monitors = new Set<WebSocket>();
++  private normalizer = new FrameNormalizer(configStore.getServerConfig());
++
++  constructor(server: AnyServer) {
++    this.wss = new WebSocketServer({ server, path: '/ws' });
++    this.wss.on('connection', (socket, req) => this.handleConnection(socket, req.url ?? ''));
++  }
++
++  private handleConnection(socket: WebSocket, url: string): void {
++    const mode = url.includes('mode=monitor') ? 'monitor' : 'tracking';
++    if (mode === 'monitor') {
++      this.monitors.add(socket);
++      socket.on('close', () => this.monitors.delete(socket));
++      return;
++    }
++    socket.on('message', (raw) => this.handleMessage(socket, raw));
++  }
++
++  private handleMessage(_socket: WebSocket, raw: RawData): void {
++    try {
++      const json = typeof raw === 'string' ? raw : raw.toString();
++      const parsed = messageSchema.parse(JSON.parse(json));
++      this.processTracking(parsed);
++    } catch (error) {
++      console.error('Invalid tracking payload', error);
++    }
++  }
++
++  private processTracking(message: TrackingEnvelope): void {
++    const normalized = this.normalizer.normalize(message.payload);
++    sinkBroadcaster.publish(normalized);
++    sessionRecorder.record(normalized);
++    const targetFps = configStore.getServerConfig().video.targetFps;
++    const metrics = {
++      cameraFps: message.metrics?.cameraFps ?? targetFps,
++      effectiveFps: message.metrics?.effectiveFps ?? targetFps,
++      afiMultiplier: message.metrics?.afiMultiplier,
++      srEnabled: message.metrics?.srEnabled,
++      gpuBackend: message.metrics?.gpuBackend,
++      addedLatencyMs: message.metrics?.addedLatencyMs,
++    };
++    const payload = JSON.stringify({ type: 'monitor', frame: normalized, metrics });
++    this.monitors.forEach((client) => {
++      if (client.readyState === WebSocket.OPEN) {
++        client.send(payload);
++      }
++    });
++  }
++
++  updateConfig(): void {
++    this.normalizer.updateConfig(configStore.getServerConfig());
++  }
++}
++
++export const trackingServerFactory = (server: AnyServer): TrackingServer => new TrackingServer(server);
+diff --git a/apps/server/test/normalizer.test.ts b/apps/server/test/normalizer.test.ts
+new file mode 100644
+index 0000000000000000000000000000000000000000..8262d90f17aad34e37f184a212f99b7ec9aeb43f
+--- /dev/null
++++ b/apps/server/test/normalizer.test.ts
+@@ -0,0 +1,17 @@
++import { describe, expect, it } from 'vitest';
++import { defaultConfig } from '@trackeovrconia/proto';
++import { FrameNormalizer } from '../src/services/normalizer.js';
++
++describe('FrameNormalizer', () => {
++  it('returns normalized frame', () => {
++    const normalizer = new FrameNormalizer(defaultConfig);
++    const frame = {
++      timestamp: Date.now(),
++      joints: {
++        hip: { pos: [0, 1, 2], rotQuat: [0, 0, 0, 1], conf: 0.9 },
++      },
++    };
++    const normalized = normalizer.normalize(frame);
++    expect(normalized.joints.hip?.pos?.length).toBe(3);
++  });
++});
+diff --git a/apps/server/tsconfig.build.json b/apps/server/tsconfig.build.json
+new file mode 100644
+index 0000000000000000000000000000000000000000..e3f6d88b8881a57a34f2faec5da244205018fae8
+--- /dev/null
++++ b/apps/server/tsconfig.build.json
+@@ -0,0 +1,10 @@
++{
++  "extends": "./tsconfig.json",
++  "compilerOptions": {
++    "noEmit": false,
++    "declaration": true,
++    "declarationMap": true,
++    "emitDeclarationOnly": false
++  },
++  "include": ["src"]
++}
+diff --git a/apps/server/tsconfig.json b/apps/server/tsconfig.json
+new file mode 100644
+index 0000000000000000000000000000000000000000..ae5ba2145b659520054a395e4ae1d75d8c21fb55
+--- /dev/null
++++ b/apps/server/tsconfig.json
+@@ -0,0 +1,7 @@
++{
++  "extends": "../../tsconfig.base.json",
++  "compilerOptions": {
++    "outDir": "dist"
++  },
++  "include": ["src", "test"]
++}
+diff --git a/apps/server/vitest.config.ts b/apps/server/vitest.config.ts
+new file mode 100644
+index 0000000000000000000000000000000000000000..a71174ddf688af5e944496a955ad1c92f790dfbd
+--- /dev/null
++++ b/apps/server/vitest.config.ts
+@@ -0,0 +1,8 @@
++import { defineConfig } from 'vitest/config';
++
++export default defineConfig({
++  test: {
++    environment: 'node',
++    include: ['test/**/*.test.ts'],
++  },
++});
+diff --git a/apps/web/index.html b/apps/web/index.html
+new file mode 100644
+index 0000000000000000000000000000000000000000..dfa8406127c07844d2ecdd6ae5bf850a1d58f5e5
+--- /dev/null
++++ b/apps/web/index.html
+@@ -0,0 +1,13 @@
++<!DOCTYPE html>
++<html lang="es">
++  <head>
++    <meta charset="UTF-8" />
++    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
++    <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
++    <title>Trackeovrconia Studio</title>
++  </head>
++  <body class="bg-slate-900 text-slate-50">
++    <div id="root"></div>
++    <script type="module" src="/src/main.tsx"></script>
++  </body>
++</html>
+diff --git a/apps/web/package.json b/apps/web/package.json
+new file mode 100644
+index 0000000000000000000000000000000000000000..75c956f75b14cfa3b06625537c1e32b6ae9e413c
+--- /dev/null
++++ b/apps/web/package.json
+@@ -0,0 +1,58 @@
++{
++  "name": "web",
++  "version": "0.1.0",
++  "private": true,
++  "type": "module",
++  "scripts": {
++    "dev": "vite",
++    "prebuild": "node ./scripts/sync-mediapipe-assets.mjs",
++    "build": "tsc -b && vite build",
++    "start": "vite preview --host 0.0.0.0 --port 5173 --strictPort",
++    "postinstall": "node ./scripts/sync-mediapipe-assets.mjs",
++    "preview": "vite preview",
++    "lint": "eslint src --ext .ts,.tsx",
++    "test": "vitest run",
++    "format": "prettier --check \"src/**/*.{ts,tsx}\""
++  },
++  "dependencies": {
++    "@mediapipe/tasks-vision": "^0.10.7",
++    "@msgpack/msgpack": "^3.0.0",
++    "@trackeovrconia/proto": "workspace:*",
++    "@trackeovrconia/utils": "workspace:*",
++    "@trackeovrconia/video-afi": "workspace:*",
++    "@tanstack/react-query": "^5.24.1",
++    "onnxruntime-web": "^1.17.0",
++    "react": "^18.2.0",
++    "react-dom": "^18.2.0",
++    "three": "^0.159.0",
++    "uuid": "^9.0.1",
++    "zustand": "^4.5.2"
++  },
++  "devDependencies": {
++    "@testing-library/jest-dom": "^6.1.6",
++    "@testing-library/react": "^14.2.1",
++    "@testing-library/user-event": "^14.5.2",
++    "@vitejs/plugin-basic-ssl": "^1.0.1",
++    "@types/node": "^20.11.0",
++    "@types/http-proxy": "^1.17.14",
++    "@types/three": "^0.180.0",
++    "@types/uuid": "^9.0.7",
++    "@types/ws": "^8.5.12",
++    "@vitejs/plugin-react": "^4.3.2",
++    "@types/react": "^18.2.37",
++    "@types/react-dom": "^18.2.15",
++    "@typescript-eslint/eslint-plugin": "^6.17.0",
++    "@typescript-eslint/parser": "^6.17.0",
++    "autoprefixer": "^10.4.16",
++    "eslint": "^8.56.0",
++    "http-proxy": "^1.18.1",
++    "jsdom": "^24.1.1",
++    "postcss": "^8.4.31",
++    "prettier": "^3.1.1",
++    "tailwindcss": "^3.3.5",
++    "typescript": "^5.3.3",
++    "vite": "^5.0.10",
++    "vitest": "^1.2.2",
++    "ws": "^8.14.2"
++  }
++}
+diff --git a/apps/web/postcss.config.js b/apps/web/postcss.config.js
+new file mode 100644
+index 0000000000000000000000000000000000000000..2aa7205d4b402a1bdfbe07110c61df920b370066
+--- /dev/null
++++ b/apps/web/postcss.config.js
+@@ -0,0 +1,6 @@
++export default {
++  plugins: {
++    tailwindcss: {},
++    autoprefixer: {},
++  },
++};
+diff --git a/apps/web/public/favicon.svg b/apps/web/public/favicon.svg
+new file mode 100644
+index 0000000000000000000000000000000000000000..3578568ee09d9734b14624495f1d6825edd1e6e6
+--- /dev/null
++++ b/apps/web/public/favicon.svg
+@@ -0,0 +1,11 @@
++<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64">
++  <defs>
++    <linearGradient id="g" x1="0%" y1="0%" x2="100%" y2="100%">
++      <stop offset="0%" stop-color="#06b6d4" />
++      <stop offset="100%" stop-color="#6366f1" />
++    </linearGradient>
++  </defs>
++  <rect x="4" y="4" width="56" height="56" rx="12" fill="url(#g)" />
++  <path d="M20 44l4-12 8-8 8 8 4 12" fill="none" stroke="#f8fafc" stroke-width="4" stroke-linecap="round" stroke-linejoin="round" />
++  <circle cx="32" cy="24" r="6" fill="#f8fafc" />
++</svg>
+diff --git a/apps/web/public/models/.gitignore b/apps/web/public/models/.gitignore
+new file mode 100644
+index 0000000000000000000000000000000000000000..7c9d611b59248fe868a3cf04d80ded04fee40d8e
+--- /dev/null
++++ b/apps/web/public/models/.gitignore
+@@ -0,0 +1,3 @@
++*
++!.gitignore
++!README.md
+diff --git a/apps/web/public/models/README.md b/apps/web/public/models/README.md
+new file mode 100644
+index 0000000000000000000000000000000000000000..c63eed4961e320333d6e938ee895d512b1ea4adc
+--- /dev/null
++++ b/apps/web/public/models/README.md
+@@ -0,0 +1,14 @@
++Coloca aquí los modelos ONNX y tareas de MediaPipe utilizados por el sistema de interpolación AFI y BlazePose.
++
++> ⚠️ No es necesario añadirlos manualmente.
++> El script `apps/web/scripts/sync-mediapipe-assets.mjs` copia los assets de MediaPipe desde `node_modules`
++> y descarga automáticamente los modelos ONNX (`pose_landmarker_full.task`, `rife-lite.onnx`, `esrgan-lite.onnx`) durante
++> `pnpm install`/`npm install` o antes de cada `pnpm build`.
++
++Si alguna descarga falla (por ejemplo, sin conexión), ejecuta manualmente:
++
++```bash
++node apps/web/scripts/sync-mediapipe-assets.mjs
++```
++
++y vuelve a lanzar el build.
+diff --git a/apps/web/scripts/sync-mediapipe-assets.mjs b/apps/web/scripts/sync-mediapipe-assets.mjs
+new file mode 100644
+index 0000000000000000000000000000000000000000..4b93ae7da6d8ba4ace89d3892a55528b8cd531e2
+--- /dev/null
++++ b/apps/web/scripts/sync-mediapipe-assets.mjs
+@@ -0,0 +1,249 @@
++import { dirname, join, resolve } from 'path';
++import { fileURLToPath } from 'url';
++import { promises as fs } from 'fs';
++import { createWriteStream } from 'fs';
++import https from 'https';
++import { createHash } from 'crypto';
++
++const scriptPath = fileURLToPath(import.meta.url);
++const here = dirname(scriptPath);
++const appRoot = resolve(here, '..');
++const publicModelsDir = resolve(appRoot, 'public', 'models');
++const KEEP_FILES = new Set(['.gitignore', 'README.md']);
++
++async function ensureDir(dir) {
++  await fs.mkdir(dir, { recursive: true });
++}
++
++async function copyFileSafe(src, dest, logger) {
++  try {
++    await ensureDir(dirname(dest));
++    await fs.copyFile(src, dest);
++    logger?.info?.(`[mediapipe] Copiado ${src} -> ${dest}`) ?? console.log(`[mediapipe] Copiado ${src} -> ${dest}`);
++  } catch (error) {
++    if (error.code === 'ENOENT') {
++      logger?.warn?.(`[mediapipe] No se encontró el archivo requerido: ${src}`) ??
++        console.warn(`[mediapipe] No se encontró el archivo requerido: ${src}`);
++    } else {
++      throw error;
++    }
++  }
++}
++
++function downloadFile(url, dest) {
++  return new Promise((resolveDownload, rejectDownload) => {
++    const request = https.get(url, (response) => {
++      if (response.statusCode && response.statusCode >= 400) {
++        rejectDownload(new Error(`Fallo al descargar ${url}: ${response.statusCode}`));
++        response.resume();
++        return;
++      }
++      const fileStream = createWriteStream(dest);
++      response.pipe(fileStream);
++      fileStream.on('finish', () => {
++        fileStream.close(resolveDownload);
++      });
++      fileStream.on('error', (error) => {
++        fileStream.close(() => rejectDownload(error));
++      });
++    });
++
++    request.on('error', rejectDownload);
++  });
++}
++
++async function verifyChecksum(filePath, expectedSha256) {
++  if (!expectedSha256) return true;
++  try {
++    const file = await fs.readFile(filePath);
++    const hash = createHash('sha256').update(file).digest('hex');
++    return hash === expectedSha256.toLowerCase();
++  } catch (_error) {
++    return false;
++  }
++}
++
++async function downloadWithVerification(url, dest, expectedSha256, logger, optional) {
++  const tempPath = `${dest}.download`;
++  await ensureDir(dirname(dest));
++  try {
++    await downloadFile(url, tempPath);
++    if (!(await verifyChecksum(tempPath, expectedSha256))) {
++      throw new Error('La suma SHA-256 no coincide.');
++    }
++    await fs.rename(tempPath, dest);
++    logger?.info?.(`[mediapipe] Descargado ${url} -> ${dest}`) ?? console.log(`[mediapipe] Descargado ${url} -> ${dest}`);
++    return true;
++  } catch (error) {
++    await fs.rm(tempPath, { force: true }).catch(() => {});
++    const reason = error instanceof Error ? error.message : String(error);
++    if (optional) {
++      logger?.warn?.(`[mediapipe] Descarga opcional fallida para ${url}: ${reason}`) ??
++        console.warn(`[mediapipe] Descarga opcional fallida para ${url}: ${reason}`);
++    } else {
++      logger?.warn?.(`[mediapipe] Descarga obligatoria fallida para ${url}: ${reason}`) ??
++        console.warn(`[mediapipe] Descarga obligatoria fallida para ${url}: ${reason}`);
++    }
++    return false;
++  }
++}
++
++async function copyDirectoryContents(srcDir, destDir, logger) {
++  let entries;
++  try {
++    entries = await fs.readdir(srcDir, { withFileTypes: true });
++  } catch (error) {
++    if (error.code === 'ENOENT') {
++      logger?.warn?.(`[mediapipe] Carpeta no encontrada: ${srcDir}`) ?? console.warn(`[mediapipe] Carpeta no encontrada: ${srcDir}`);
++      return;
++    }
++    throw error;
++  }
++
++  await ensureDir(destDir);
++
++  for (const entry of entries) {
++    const srcPath = join(srcDir, entry.name);
++    const destPath = join(destDir, entry.name);
++    if (entry.isDirectory()) {
++      await copyDirectoryContents(srcPath, destPath, logger);
++    } else if (entry.isFile()) {
++      await copyFileSafe(srcPath, destPath, logger);
++    }
++  }
++}
++
++export async function syncMediaPipeAssets(logger = console) {
++  const pkgDir = resolve(appRoot, 'node_modules', '@mediapipe', 'tasks-vision');
++  try {
++    await fs.access(pkgDir);
++  } catch (_error) {
++    logger?.warn?.('[mediapipe] Paquete @mediapipe/tasks-vision no instalado. Omitiendo copia de assets.');
++    return;
++  }
++  const wasmDir = join(pkgDir, 'wasm');
++  const poseCandidates = [
++    join(pkgDir, 'pose_landmarker_full.task'),
++    join(pkgDir, 'pose_landmarker', 'pose_landmarker_full', 'float16', 'latest', 'pose_landmarker_full.task'),
++  ];
++  const poseDest = join(publicModelsDir, 'pose_landmarker_full.task');
++  const poseCdnUrl =
++    'https://storage.googleapis.com/mediapipe-models/pose_landmarker/pose_landmarker_full/float16/latest/pose_landmarker_full.task';
++
++  await ensureDir(publicModelsDir);
++  await copyDirectoryContents(wasmDir, publicModelsDir, logger);
++  const assetPlan = [
++    {
++      name: 'pose_landmarker_full.task',
++      destination: poseDest,
++      candidates: poseCandidates,
++      download: {
++        url: poseCdnUrl,
++        sha256: '4eaa5eb7a98365221087693fcc286334cf0858e2eb6e15b506aa4a7ecdcec4ad',
++      },
++    },
++    {
++      name: 'rife-lite.onnx',
++      destination: join(publicModelsDir, 'rife-lite.onnx'),
++      download: {
++        url: 'https://github.com/PINTO0309/PINTO_model_zoo/raw/main/109_RIFE/01_float32/rife.onnx',
++        sha256: '69b06c535eab45004243e9897d985b88e8deef06b9e211cd53a31318b040f468',
++      },
++    },
++    {
++      name: 'esrgan-lite.onnx',
++      destination: join(publicModelsDir, 'esrgan-lite.onnx'),
++      optional: true,
++      download: {
++        url: 'https://github.com/microsoft/onnxruntime-inference-examples/raw/main/js/super-resolution/model.onnx',
++        sha256: 'cbcf9a0bb63e1c3ce5df8bdc9ea903e70ee9dc4c328e676b4906d09ad1b47836',
++      },
++    },
++  ];
++
++  for (const asset of assetPlan) {
++    const { destination, candidates = [], download, optional, name } = asset;
++    let satisfied = false;
++    if (await verifyChecksum(destination, download?.sha256 ?? '')) {
++      logger?.info?.(`[mediapipe] Reutilizando ${name} existente en ${destination}`) ??
++        console.log(`[mediapipe] Reutilizando ${name} existente en ${destination}`);
++      continue;
++    }
++
++    for (const candidate of candidates) {
++      try {
++        await fs.access(candidate);
++        await copyFileSafe(candidate, destination, logger);
++        if (await verifyChecksum(destination, download?.sha256 ?? '')) {
++          satisfied = true;
++          break;
++        }
++      } catch (error) {
++        if (error.code !== 'ENOENT') {
++          throw error;
++        }
++      }
++    }
++
++    if (satisfied) {
++      continue;
++    }
++
++    if (download) {
++      const succeeded = await downloadWithVerification(download.url, destination, download.sha256, logger, optional);
++      if (succeeded) {
++        satisfied = true;
++      }
++    }
++
++    if (!satisfied && !optional) {
++      logger?.warn?.(`[mediapipe] No se pudo preparar ${name}. Se intentará desde CDN en tiempo de ejecución.`) ??
++        console.warn(`[mediapipe] No se pudo preparar ${name}. Se intentará desde CDN en tiempo de ejecución.`);
++    }
++  }
++}
++
++export async function cleanMediaPipeAssets(logger = console) {
++  let entries = [];
++  try {
++    entries = await fs.readdir(publicModelsDir, { withFileTypes: true });
++  } catch (error) {
++    if (error.code === 'ENOENT') {
++      logger?.info?.('[mediapipe] Carpeta de modelos ya limpia.');
++      return;
++    }
++    throw error;
++  }
++
++  await Promise.all(
++    entries.map(async (entry) => {
++      if (KEEP_FILES.has(entry.name)) {
++        return;
++      }
++      const entryPath = join(publicModelsDir, entry.name);
++      if (entry.isDirectory()) {
++        await fs.rm(entryPath, { recursive: true, force: true });
++      } else {
++        await fs.rm(entryPath, { force: true });
++      }
++      logger?.info?.(`[mediapipe] Eliminado ${entryPath}`) ?? console.log(`[mediapipe] Eliminado ${entryPath}`);
++    })
++  );
++}
++
++const invokedFromCli = Boolean(process.argv[1]) && resolve(process.argv[1]) === scriptPath;
++
++if (invokedFromCli) {
++  const wantsClean = process.argv.includes('--clean');
++  const logger = console;
++  (async () => {
++    if (wantsClean) {
++      await cleanMediaPipeAssets(logger);
++    } else {
++      await syncMediaPipeAssets(logger);
++    }
++  })().catch((error) => {
++    logger.error?.('[mediapipe] Error en la sincronización de assets:', error);
++    process.exitCode = 1;
++  });
++}
+diff --git a/apps/web/src/components/AISmoothPanel.tsx b/apps/web/src/components/AISmoothPanel.tsx
+new file mode 100644
+index 0000000000000000000000000000000000000000..f48e2646cd74835c0a4daa293eba4a33ad343d7a
+--- /dev/null
++++ b/apps/web/src/components/AISmoothPanel.tsx
+@@ -0,0 +1,59 @@
++import { useServerConfig } from '../hooks/useServerConfig';
++import { useAppStore } from '../state/store';
++
++const AISmoothPanel = () => {
++  const videoConfig = useAppStore((state) => state.videoConfig);
++  const { updateVideoConfig } = useServerConfig();
++
++  return (
++    <section className="rounded-lg bg-slate-800 p-4 shadow">
++      <header className="mb-3">
++        <h2 className="text-lg font-semibold">AI Smooth FPS + Super-Resolution</h2>
++      </header>
++      <div className="space-y-3 text-sm">
++        <label className="flex items-center justify-between">
++          <span>Modo AI Smooth</span>
++          <select
++            className="rounded border border-slate-600 bg-slate-900 p-2"
++            value={videoConfig.aiSmooth}
++            onChange={(event) => updateVideoConfig({ aiSmooth: event.target.value as typeof videoConfig.aiSmooth })}
++          >
++            <option value="auto">Auto</option>
++            <option value="on">On</option>
++            <option value="off">Off</option>
++          </select>
++        </label>
++        <label className="flex items-center justify-between">
++          <span>FPS objetivo</span>
++          <select
++            className="rounded border border-slate-600 bg-slate-900 p-2"
++            value={videoConfig.targetFps}
++            onChange={(event) => updateVideoConfig({ targetFps: Number(event.target.value) })}
++          >
++            {[30, 45, 60].map((fps) => (
++              <option key={fps} value={fps}>
++                {fps}
++              </option>
++            ))}
++          </select>
++        </label>
++        <label className="flex items-center justify-between">
++          <span>Super-Resolution</span>
++          <select
++            className="rounded border border-slate-600 bg-slate-900 p-2"
++            value={videoConfig.sr}
++            onChange={(event) => updateVideoConfig({ sr: event.target.value as typeof videoConfig.sr })}
++          >
++            <option value="off">Off</option>
++            <option value="auto">Auto x2</option>
++          </select>
++        </label>
++        <p className="text-xs text-slate-400">
++          Activa automáticamente la interpolación de frames cuando la cámara baja de 60 FPS.
++        </p>
++      </div>
++    </section>
++  );
++};
++
++export default AISmoothPanel;
+diff --git a/apps/web/src/components/CameraPanel.tsx b/apps/web/src/components/CameraPanel.tsx
+new file mode 100644
+index 0000000000000000000000000000000000000000..61e2ef231fd4a0395ac9ea0fe7e9d1e38a7084bd
+--- /dev/null
++++ b/apps/web/src/components/CameraPanel.tsx
+@@ -0,0 +1,35 @@
++import { useCameraDevices } from '../hooks/useCameraDevices';
++import { useAppStore } from '../state/store';
++
++const CameraPanel = () => {
++  const { devices, error } = useCameraDevices();
++  const selected = useAppStore((state) => state.selectedCamera);
++  const selectCamera = useAppStore((state) => state.selectCamera);
++
++  return (
++    <section className="rounded-lg bg-slate-800 p-4 shadow">
++      <header className="mb-3 flex items-center justify-between">
++        <h2 className="text-lg font-semibold">Cámara</h2>
++        <span className="text-xs text-slate-400">Selección de dispositivo</span>
++      </header>
++      {error && <p className="text-sm text-amber-400">{error}</p>}
++      <select
++        className="w-full rounded border border-slate-600 bg-slate-900 p-2 text-sm"
++        value={selected}
++        onChange={(event) => selectCamera(event.target.value)}
++      >
++        <option value="">Predeterminada</option>
++        {devices.map((device) => (
++          <option key={device.deviceId} value={device.deviceId}>
++            {device.label}
++          </option>
++        ))}
++      </select>
++      <p className="mt-3 text-xs text-slate-400">
++        Otorga permisos de cámara para acceder a todos los dispositivos disponibles.
++      </p>
++    </section>
++  );
++};
++
++export default CameraPanel;
+diff --git a/apps/web/src/components/MetricsPanel.tsx b/apps/web/src/components/MetricsPanel.tsx
+new file mode 100644
+index 0000000000000000000000000000000000000000..abee6613148adfefc25039e189dd4ffe7862b347
+--- /dev/null
++++ b/apps/web/src/components/MetricsPanel.tsx
+@@ -0,0 +1,30 @@
++import { useAppStore } from '../state/store';
++
++const MetricRow = ({ label, value }: { label: string; value: string | number | undefined }) => (
++  <div className="flex justify-between text-sm">
++    <span className="text-slate-400">{label}</span>
++    <span className="font-mono text-slate-100">{value ?? '—'}</span>
++  </div>
++);
++
++const MetricsPanel = () => {
++  const metrics = useAppStore((state) => state.metrics);
++
++  return (
++    <section className="rounded-lg bg-slate-800 p-4 shadow">
++      <header className="mb-3">
++        <h2 className="text-lg font-semibold">Diagnóstico en tiempo real</h2>
++      </header>
++      <div className="space-y-2">
++        <MetricRow label="Cam FPS" value={metrics?.cameraFps?.toFixed(1)} />
++        <MetricRow label="FPS efectivo" value={metrics?.effectiveFps?.toFixed(1)} />
++        <MetricRow label="AFI x" value={metrics?.afiMultiplier} />
++        <MetricRow label="SR" value={metrics?.srEnabled ? 'On' : 'Off'} />
++        <MetricRow label="Backend GPU" value={metrics?.gpuBackend} />
++        <MetricRow label="Latencia añadida" value={metrics?.addedLatencyMs?.toFixed(1)} />
++      </div>
++    </section>
++  );
++};
++
++export default MetricsPanel;
+diff --git a/apps/web/src/components/SinksManager.tsx b/apps/web/src/components/SinksManager.tsx
+new file mode 100644
+index 0000000000000000000000000000000000000000..633cf1eb9611b6255d0ad07b824962d4ef5302e3
+--- /dev/null
++++ b/apps/web/src/components/SinksManager.tsx
+@@ -0,0 +1,125 @@
++import { FormEvent, useState } from 'react';
++import { v4 as uuid } from 'uuid';
++import { Sink } from '@trackeovrconia/proto';
++import { useAppStore } from '../state/store';
++
++interface SinkFormState {
++  type: 'osc' | 'slimevr';
++  host: string;
++  port: number;
++  namespace: string;
++  profileId: string;
++}
++
++const defaultForm: SinkFormState = {
++  type: 'osc',
++  host: '127.0.0.1',
++  port: 9000,
++  namespace: '/body',
++  profileId: 'default',
++};
++
++const SinksManager = () => {
++  const sinks = useAppStore((state) => state.sinks);
++  const setSinks = useAppStore((state) => state.setSinks);
++  const [form, setForm] = useState<SinkFormState>(defaultForm);
++
++  const submit = async (event: FormEvent) => {
++    event.preventDefault();
++    const payload: Sink =
++      form.type === 'osc'
++        ? { id: uuid(), type: 'osc', host: form.host, port: form.port, namespace: form.namespace, flat: false }
++        : { id: uuid(), type: 'slimevr', host: form.host, port: form.port, profileId: form.profileId };
++    const res = await fetch('/api/sinks', {
++      method: 'POST',
++      headers: { 'Content-Type': 'application/json' },
++      body: JSON.stringify(payload),
++    });
++    if (res.ok) {
++      setSinks([...sinks, payload]);
++    }
++  };
++
++  const remove = async (id: string) => {
++    const res = await fetch(`/api/sinks/${id}`, { method: 'DELETE' });
++    if (res.ok) {
++      setSinks(sinks.filter((sink) => sink.id !== id));
++    }
++  };
++
++  return (
++    <section className="rounded-lg bg-slate-800 p-4 shadow">
++      <header className="mb-3">
++        <h2 className="text-lg font-semibold">Destinos OSC / SlimeVR</h2>
++      </header>
++      <form className="grid gap-3" onSubmit={submit}>
++        <label className="text-sm">
++          Tipo
++          <select
++            className="mt-1 w-full rounded border border-slate-600 bg-slate-900 p-2"
++            value={form.type}
++            onChange={(event) => setForm((prev) => ({ ...prev, type: event.target.value as SinkFormState['type'] }))}
++          >
++            <option value="osc">OSC</option>
++            <option value="slimevr">SlimeVR</option>
++          </select>
++        </label>
++        <div className="grid grid-cols-2 gap-3">
++          <label className="text-sm">
++            Host
++            <input
++              className="mt-1 w-full rounded border border-slate-600 bg-slate-900 p-2"
++              value={form.host}
++              onChange={(event) => setForm((prev) => ({ ...prev, host: event.target.value }))}
++            />
++          </label>
++          <label className="text-sm">
++            Puerto
++            <input
++              type="number"
++              className="mt-1 w-full rounded border border-slate-600 bg-slate-900 p-2"
++              value={form.port}
++              onChange={(event) => setForm((prev) => ({ ...prev, port: Number(event.target.value) }))}
++            />
++          </label>
++        </div>
++        {form.type === 'osc' ? (
++          <label className="text-sm">
++            Namespace
++            <input
++              className="mt-1 w-full rounded border border-slate-600 bg-slate-900 p-2"
++              value={form.namespace}
++              onChange={(event) => setForm((prev) => ({ ...prev, namespace: event.target.value }))}
++            />
++          </label>
++        ) : (
++          <label className="text-sm">
++            Perfil SlimeVR
++            <input
++              className="mt-1 w-full rounded border border-slate-600 bg-slate-900 p-2"
++              value={form.profileId}
++              onChange={(event) => setForm((prev) => ({ ...prev, profileId: event.target.value }))}
++            />
++          </label>
++        )}
++        <button type="submit" className="rounded bg-emerald-500 px-4 py-2 text-sm font-semibold text-slate-900">
++          Añadir destino
++        </button>
++      </form>
++      <ul className="mt-4 space-y-2 text-sm">
++        {sinks.map((sink) => (
++          <li key={sink.id} className="flex items-center justify-between rounded bg-slate-900/60 p-2">
++            <span>
++              {sink.type.toUpperCase()} → {sink.host}:{sink.port}
++            </span>
++            <button className="text-xs text-rose-400" onClick={() => remove(sink.id)}>
++              Eliminar
++            </button>
++          </li>
++        ))}
++      </ul>
++    </section>
++  );
++};
++
++export default SinksManager;
+diff --git a/apps/web/src/components/SmoothingPanel.tsx b/apps/web/src/components/SmoothingPanel.tsx
+new file mode 100644
+index 0000000000000000000000000000000000000000..720f374e7d6290f24dd486413318711878eff9fb
+--- /dev/null
++++ b/apps/web/src/components/SmoothingPanel.tsx
+@@ -0,0 +1,31 @@
++import { useAppStore } from '../state/store';
++
++const SmoothingPanel = () => {
++  const smoothing = useAppStore((state) => state.smoothingStrength);
++  const setSmoothing = useAppStore((state) => state.setSmoothing);
++
++  return (
++    <section className="rounded-lg bg-slate-800 p-4 shadow">
++      <header className="mb-3">
++        <h2 className="text-lg font-semibold">Suavizado</h2>
++      </header>
++      <label className="flex items-center gap-4">
++        <input
++          type="range"
++          min={0}
++          max={1}
++          step={0.05}
++          value={smoothing}
++          onChange={(event) => setSmoothing(Number(event.target.value))}
++          className="flex-1"
++        />
++        <span className="w-16 text-right font-mono text-sm">{smoothing.toFixed(2)}</span>
++      </label>
++      <p className="mt-2 text-xs text-slate-400">
++        Ajusta la intensidad del filtro One Euro/Kalman según la estabilidad requerida.
++      </p>
++    </section>
++  );
++};
++
++export default SmoothingPanel;
+diff --git a/apps/web/src/hooks/useCameraDevices.ts b/apps/web/src/hooks/useCameraDevices.ts
+new file mode 100644
+index 0000000000000000000000000000000000000000..668bf68a8a650c2ea808a68b3126ee45819d84ec
+--- /dev/null
++++ b/apps/web/src/hooks/useCameraDevices.ts
+@@ -0,0 +1,47 @@
++import { useEffect, useState } from 'react';
++
++export interface CameraDevice {
++  deviceId: string;
++  label: string;
++}
++
++export const useCameraDevices = () => {
++  const [devices, setDevices] = useState<CameraDevice[]>([]);
++  const [error, setError] = useState<string>();
++
++  useEffect(() => {
++    const enumerate = async () => {
++      if (typeof window !== 'undefined') {
++        const isSecure = window.isSecureContext || ['localhost', '127.0.0.1'].includes(window.location.hostname);
++        if (!isSecure) {
++          setError('La enumeración de cámaras requiere ejecutar la app bajo HTTPS o localhost.');
++          setDevices([]);
++          return;
++        }
++      }
++      if (!navigator.mediaDevices?.enumerateDevices) {
++        setDevices([]);
++        return;
++      }
++      try {
++        const mediaDevices = await navigator.mediaDevices.enumerateDevices();
++        const video = mediaDevices
++          .filter((device) => device.kind === 'videoinput')
++          .map((device, index) => ({
++            deviceId: device.deviceId,
++            label: device.label || `Cámara ${index + 1}`,
++          }));
++        setDevices(video);
++      } catch (err) {
++        setError((err as Error).message);
++      }
++    };
++    enumerate();
++    if (navigator.mediaDevices?.addEventListener) {
++      navigator.mediaDevices.addEventListener('devicechange', enumerate);
++      return () => navigator.mediaDevices.removeEventListener('devicechange', enumerate);
++    }
++  }, []);
++
++  return { devices, error };
++};
+diff --git a/apps/web/src/hooks/useServerConfig.ts b/apps/web/src/hooks/useServerConfig.ts
+new file mode 100644
+index 0000000000000000000000000000000000000000..e24d1f5b59c89ab9b780bd5d2278e8319499bc43
+--- /dev/null
++++ b/apps/web/src/hooks/useServerConfig.ts
+@@ -0,0 +1,28 @@
++import { useEffect } from 'react';
++import { useAppStore } from '../state/store';
++
++export const useServerConfig = () => {
++  const setVideoConfig = useAppStore((state) => state.setVideoConfig);
++  const setSinks = useAppStore((state) => state.setSinks);
++
++  useEffect(() => {
++    fetch('/api/config')
++      .then((res) => res.json())
++      .then((config) => setVideoConfig(config.video));
++    fetch('/api/sinks')
++      .then((res) => res.json())
++      .then((sinks) => setSinks(sinks));
++  }, [setVideoConfig, setSinks]);
++
++  return {
++    updateVideoConfig: async (videoConfig: Partial<ReturnType<typeof useAppStore.getState>['videoConfig']>) => {
++      const res = await fetch('/api/config/video', {
++        method: 'PUT',
++        headers: { 'Content-Type': 'application/json' },
++        body: JSON.stringify(videoConfig),
++      });
++      const data = await res.json();
++      setVideoConfig(data);
++    },
++  };
++};
+diff --git a/apps/web/src/hooks/useTracking.ts b/apps/web/src/hooks/useTracking.ts
+new file mode 100644
+index 0000000000000000000000000000000000000000..6ff5f27e234a34f0a2ffa1ea87f1f3be5580ead6
+--- /dev/null
++++ b/apps/web/src/hooks/useTracking.ts
+@@ -0,0 +1,328 @@
++import { useCallback, useEffect, useMemo, useRef } from 'react';
++import { useAppStore } from '../state/store';
++import type { BodyFrame } from '@trackeovrconia/proto';
++
++interface WorkerMetrics {
++  cameraFps: number;
++  effectiveFps: number;
++  afiMultiplier?: number;
++  srEnabled?: boolean;
++  gpuBackend?: string;
++  addedLatencyMs?: number;
++}
++
++interface WorkerPoseMessage {
++  type: 'pose';
++  frame: BodyFrame;
++  metrics: WorkerMetrics;
++}
++
++interface WorkerMetricsMessage {
++  type: 'metrics';
++  metrics: WorkerMetrics;
++}
++
++interface WorkerErrorMessage {
++  type: 'error';
++  message: string;
++}
++
++type WorkerMessages = WorkerPoseMessage | WorkerMetricsMessage | WorkerErrorMessage;
++
++export const useTracking = (modelAssetPath: string) => {
++  const videoRef = useRef<HTMLVideoElement>(null);
++  const overlayRef = useRef<HTMLCanvasElement | null>(null);
++  const workerRef = useRef<Worker>();
++  const wsRef = useRef<WebSocket>();
++  const lastTimestamp = useRef<number>(0);
++  const frameHandleRef = useRef<number>();
++  const fallbackHandleRef = useRef<number>();
++  const streamRef = useRef<MediaStream | null>(null);
++  const trackingActiveRef = useRef(false);
++  const setMetrics = useAppStore((state) => state.setMetrics);
++  const setFrame = useAppStore((state) => state.setFrame);
++  const smoothing = useAppStore((state) => state.smoothingStrength);
++  const videoConfig = useAppStore((state) => state.videoConfig);
++  const selectedCamera = useAppStore((state) => state.selectedCamera);
++  const trackingActive = useAppStore((state) => state.trackingActive);
++  const setTrackingActive = useAppStore((state) => state.setTrackingActive);
++  const setTrackingError = useAppStore((state) => state.setTrackingError);
++  const trackingError = useAppStore((state) => state.trackingError);
++
++  const secureContext = useMemo(() => {
++    if (typeof window === 'undefined') return false;
++    if (window.isSecureContext) return true;
++    return window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1';
++  }, []);
++
++  const wsUrl = useMemo(() => {
++    if (typeof window === 'undefined') return undefined;
++    const configured = import.meta.env.VITE_WS_URL as string | undefined;
++    if (configured) return configured;
++
++    const { protocol, hostname, port } = window.location;
++    const explicitHost = (import.meta.env.VITE_SERVER_HOST as string | undefined) ?? hostname;
++    const explicitPort =
++      (import.meta.env.VITE_WS_PORT as string | undefined) ??
++      (import.meta.env.VITE_SERVER_PORT as string | undefined) ??
++      undefined;
++
++    const devPorts = ['5173', '4173'];
++    const inferredPort = (() => {
++      if (explicitPort) return explicitPort;
++      if (port && port.length > 0) {
++        if (devPorts.includes(port)) {
++          return '4000';
++        }
++        return port;
++      }
++      return protocol === 'https:' ? undefined : '4000';
++    })();
++
++    const scheme = protocol === 'https:' ? 'wss' : 'ws';
++    const authority = inferredPort ? `${explicitHost}:${inferredPort}` : explicitHost;
++    return `${scheme}://${authority}/ws`;
++  }, []);
++
++  const ensureSocket = useCallback(() => {
++    if (typeof WebSocket === 'undefined') return;
++    if (!wsUrl) return;
++    if (wsRef.current && wsRef.current.readyState <= WebSocket.OPEN) return;
++    try {
++      wsRef.current = new WebSocket(wsUrl);
++    } catch (error) {
++      console.error('No se pudo crear el WebSocket', error);
++      setTrackingError('No se pudo conectar con el servidor de tracking.');
++      return;
++    }
++    wsRef.current.addEventListener('open', () => {
++      setTrackingError(undefined);
++    });
++    wsRef.current.addEventListener('error', () => {
++      setTrackingError('No se pudo conectar con el servidor de tracking.');
++    });
++    wsRef.current.addEventListener('close', () => {
++      if (trackingActiveRef.current) {
++        window.setTimeout(() => ensureSocket(), 1000);
++      }
++    });
++  }, [setTrackingError, wsUrl]);
++
++  const sendFrame = useCallback(
++    (frame: BodyFrame, metrics: WorkerPoseMessage['metrics']) => {
++      ensureSocket();
++      if (!wsRef.current || wsRef.current.readyState !== WebSocket.OPEN) return;
++      const payload = {
++        type: 'tracking',
++        payload: frame,
++        metrics,
++        smoothing,
++      };
++      wsRef.current.send(JSON.stringify(payload));
++    },
++    [ensureSocket, smoothing],
++  );
++
++  const initWorker = useCallback(() => {
++    if (workerRef.current) return;
++    if (!overlayRef.current) return;
++    if (typeof Worker === 'undefined') return;
++    workerRef.current = new Worker(new URL('../workers/trackingWorker.ts', import.meta.url), {
++      type: 'classic',
++    });
++    const offscreen = overlayRef.current?.transferControlToOffscreen?.();
++    const message = {
++      type: 'init' as const,
++      modelAssetPath,
++      video: videoConfig,
++      canvas: offscreen,
++    };
++    if (offscreen) {
++      workerRef.current.postMessage(message, [offscreen]);
++    } else {
++      workerRef.current.postMessage(message);
++    }
++    workerRef.current.onmessage = (event: MessageEvent<WorkerMessages>) => {
++      if (event.data.type === 'pose') {
++        const { frame, metrics } = event.data;
++        setMetrics(metrics);
++        setFrame(frame);
++        sendFrame(frame, metrics);
++        return;
++      }
++      if (event.data.type === 'metrics') {
++        setMetrics(event.data.metrics);
++        return;
++      }
++      if (event.data.type === 'error') {
++        setTrackingError(event.data.message);
++      }
++    };
++  }, [modelAssetPath, videoConfig, setMetrics, setFrame, sendFrame, setTrackingError]);
++
++  const captureFrame = useCallback(
++    async (_now: DOMHighResTimeStamp, metadata: VideoFrameCallbackMetadata) => {
++      const video = videoRef.current;
++      if (!video || !workerRef.current || !trackingActiveRef.current) {
++        return false;
++      }
++      try {
++        const bitmap = await createImageBitmap(video);
++        const timestamp = metadata.mediaTime * 1000;
++        const dt = timestamp - lastTimestamp.current;
++        const cameraFps = dt > 0 ? 1000 / dt : videoConfig.targetFps;
++        lastTimestamp.current = timestamp;
++        workerRef.current.postMessage(
++          {
++            type: 'frame',
++            frame: bitmap,
++            timestamp,
++            cameraFps,
++          },
++          [bitmap],
++        );
++      } catch (error) {
++        console.error('Frame capture error', error);
++        return false;
++      }
++      return trackingActiveRef.current;
++    },
++    [videoConfig.targetFps],
++  );
++
++  const scheduleNextFrame = useCallback(() => {
++    const video = videoRef.current;
++    if (!video) return;
++    if ('requestVideoFrameCallback' in video) {
++      frameHandleRef.current = video.requestVideoFrameCallback(async (now, metadata) => {
++        const proceed = await captureFrame(now, metadata);
++        if (proceed) {
++          scheduleNextFrame();
++        }
++      });
++      return;
++    }
++    const fallbackVideo = video as HTMLVideoElement;
++    fallbackHandleRef.current = window.setTimeout(async () => {
++      const metadata = {
++        mediaTime: fallbackVideo.currentTime,
++        presentedFrames: 0,
++      } as VideoFrameCallbackMetadata;
++      const proceed = await captureFrame(performance.now(), metadata);
++      if (proceed) {
++        scheduleNextFrame();
++      }
++    }, 1000 / Math.max(1, videoConfig.targetFps));
++  }, [captureFrame, videoConfig.targetFps]);
++
++  const cancelFrameLoop = useCallback(() => {
++    if (frameHandleRef.current && videoRef.current?.cancelVideoFrameCallback) {
++      videoRef.current.cancelVideoFrameCallback(frameHandleRef.current);
++    }
++    frameHandleRef.current = undefined;
++    if (fallbackHandleRef.current) {
++      clearTimeout(fallbackHandleRef.current);
++      fallbackHandleRef.current = undefined;
++    }
++  }, []);
++
++  const stopStream = useCallback(() => {
++    cancelFrameLoop();
++    streamRef.current?.getTracks().forEach((track) => track.stop());
++    streamRef.current = null;
++    if (videoRef.current) {
++      videoRef.current.srcObject = null;
++    }
++    trackingActiveRef.current = false;
++    lastTimestamp.current = 0;
++    setTrackingActive(false);
++  }, [cancelFrameLoop, setTrackingActive]);
++
++  const openStream = useCallback(async () => {
++    const video = videoRef.current;
++    if (!video) throw new Error('Video element no disponible');
++    if (!navigator.mediaDevices?.getUserMedia) {
++      throw new Error('getUserMedia no está soportado en este navegador');
++    }
++    const stream = await navigator.mediaDevices.getUserMedia({ video: { deviceId: selectedCamera || undefined } });
++    streamRef.current?.getTracks().forEach((track) => track.stop());
++    streamRef.current = stream;
++    video.srcObject = stream;
++    await video.play();
++  }, [selectedCamera]);
++
++  const startTracking = useCallback(async () => {
++    if (trackingActiveRef.current) return;
++    if (!secureContext) {
++      setTrackingError('La cámara requiere ejecutar la aplicación bajo HTTPS o localhost.');
++      return;
++    }
++    try {
++      setTrackingError(undefined);
++      initWorker();
++      ensureSocket();
++      await openStream();
++      trackingActiveRef.current = true;
++      setTrackingActive(true);
++      scheduleNextFrame();
++    } catch (error) {
++      console.error('No se pudo iniciar el tracking', error);
++      setTrackingError((error as Error).message);
++      stopStream();
++    }
++  }, [ensureSocket, initWorker, openStream, scheduleNextFrame, secureContext, setTrackingActive, setTrackingError, stopStream]);
++
++  const stopTracking = useCallback(() => {
++    stopStream();
++  }, [stopStream]);
++
++  useEffect(() => {
++    ensureSocket();
++  }, [ensureSocket]);
++
++  useEffect(() => {
++    if (!trackingActiveRef.current) return;
++    cancelFrameLoop();
++    openStream()
++      .then(() => {
++        scheduleNextFrame();
++      })
++      .catch((error) => {
++        console.error('Cambio de cámara fallido', error);
++        setTrackingError((error as Error).message);
++      });
++  }, [cancelFrameLoop, openStream, scheduleNextFrame, setTrackingError]);
++
++  const overlayCallback = useCallback(
++    (node: HTMLCanvasElement | null) => {
++      overlayRef.current = node;
++      if (node) {
++        initWorker();
++      }
++    },
++    [initWorker],
++  );
++
++  useEffect(() => {
++    return () => {
++      stopStream();
++      if (workerRef.current) {
++        workerRef.current.terminate();
++        workerRef.current = undefined;
++      }
++      if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
++        wsRef.current.close();
++      }
++    };
++  }, [stopStream]);
++
++  return {
++    videoRef,
++    overlayRef: overlayCallback,
++    startTracking,
++    stopTracking,
++    trackingActive,
++    trackingError,
++    secureContext,
++  };
++};
+diff --git a/apps/web/src/index.css b/apps/web/src/index.css
+new file mode 100644
+index 0000000000000000000000000000000000000000..dbbf4856ee553e4ab6aa9c2eeea4e9405dbb45b3
+--- /dev/null
++++ b/apps/web/src/index.css
+@@ -0,0 +1,7 @@
++@tailwind base;
++@tailwind components;
++@tailwind utilities;
++
++body {
++  font-family: 'Inter', system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
++}
+diff --git a/apps/web/src/main.tsx b/apps/web/src/main.tsx
+new file mode 100644
+index 0000000000000000000000000000000000000000..7693d552291f8f84898445fbc0de6702ba86dd6d
+--- /dev/null
++++ b/apps/web/src/main.tsx
+@@ -0,0 +1,10 @@
++import React from 'react';
++import ReactDOM from 'react-dom/client';
++import App from './views/App';
++import './index.css';
++
++ReactDOM.createRoot(document.getElementById('root') as HTMLElement).render(
++  <React.StrictMode>
++    <App />
++  </React.StrictMode>,
++);
+diff --git a/apps/web/src/state/store.ts b/apps/web/src/state/store.ts
+new file mode 100644
+index 0000000000000000000000000000000000000000..4b8dbdb56f8bcaadc78a2cf13d24241d9f7b95cc
+--- /dev/null
++++ b/apps/web/src/state/store.ts
+@@ -0,0 +1,61 @@
++import { create } from 'zustand';
++import { FrameMetrics, stableFps } from '@trackeovrconia/utils';
++import { BodyFrame, OscSink, Sink, ServerConfig, SlimeVrSink } from '@trackeovrconia/proto';
++
++type VideoConfig = ServerConfig['video'];
++
++type AppState = {
++  videoConfig: VideoConfig;
++  metrics?: FrameMetrics;
++  lastFrame?: BodyFrame;
++  sinks: Sink[];
++  selectedCamera?: string;
++  smoothingStrength: number;
++  studioMode: 'standard' | 'studio';
++  trackingActive: boolean;
++  trackingError?: string;
++  setVideoConfig: (config: VideoConfig) => void;
++  setMetrics: (metrics: FrameMetrics) => void;
++  setFrame: (frame: BodyFrame) => void;
++  setSinks: (sinks: Sink[]) => void;
++  selectCamera: (deviceId: string) => void;
++  setSmoothing: (value: number) => void;
++  toggleStudio: () => void;
++  setTrackingActive: (active: boolean) => void;
++  setTrackingError: (message?: string) => void;
++};
++
++export const useAppStore = create<AppState>((set, get) => ({
++  videoConfig: {
++    targetFps: 60,
++    aiSmooth: 'auto',
++    sr: 'off',
++  },
++  sinks: [],
++  smoothingStrength: 0.5,
++  studioMode: 'standard',
++  trackingActive: false,
++  setVideoConfig: (config) => set({ videoConfig: config }),
++  setMetrics: (metrics) => {
++    const base = get().videoConfig;
++    set({
++      metrics: {
++        ...metrics,
++        effectiveFps: metrics.effectiveFps || stableFps(metrics.cameraFps, base.targetFps),
++      },
++    });
++  },
++  setFrame: (frame) => set({ lastFrame: frame }),
++  setSinks: (sinks) => set({ sinks }),
++  selectCamera: (deviceId) => set({ selectedCamera: deviceId }),
++  setSmoothing: (value) => set({ smoothingStrength: value }),
++  toggleStudio: () => set((state) => ({ studioMode: state.studioMode === 'studio' ? 'standard' : 'studio' })),
++  setTrackingActive: (active) =>
++    set((state) => ({ trackingActive: active, trackingError: active ? undefined : state.trackingError })),
++  setTrackingError: (message) => set({ trackingError: message }),
++}));
++
++export const groupSinks = (sinks: Sink[]): { osc: OscSink[]; slime: SlimeVrSink[] } => ({
++  osc: sinks.filter((sink): sink is OscSink => sink.type === 'osc'),
++  slime: sinks.filter((sink): sink is SlimeVrSink => sink.type === 'slimevr'),
++});
+diff --git a/apps/web/src/types/global.d.ts b/apps/web/src/types/global.d.ts
+new file mode 100644
+index 0000000000000000000000000000000000000000..c8b4e083117739a1c084bd5d70accf9a19207922
+--- /dev/null
++++ b/apps/web/src/types/global.d.ts
+@@ -0,0 +1 @@
++declare type GPUTexture = unknown;
+diff --git a/apps/web/src/types/proto.ts b/apps/web/src/types/proto.ts
+new file mode 100644
+index 0000000000000000000000000000000000000000..6933a6bf763fb345c107c176c9d259c13a244c87
+--- /dev/null
++++ b/apps/web/src/types/proto.ts
+@@ -0,0 +1 @@
++export * from '../../../../packages/proto/src/index';
+diff --git a/apps/web/src/types/utils.ts b/apps/web/src/types/utils.ts
+new file mode 100644
+index 0000000000000000000000000000000000000000..022716762c1d385fcab585697a24ceac07583c29
+--- /dev/null
++++ b/apps/web/src/types/utils.ts
+@@ -0,0 +1 @@
++export * from '../../../../packages/utils/src/index';
+diff --git a/apps/web/src/types/video-afi.ts b/apps/web/src/types/video-afi.ts
+new file mode 100644
+index 0000000000000000000000000000000000000000..e10cd7c78a94131226424cf37cd630933afa2577
+--- /dev/null
++++ b/apps/web/src/types/video-afi.ts
+@@ -0,0 +1 @@
++export * from '../../../../packages/video-afi/src/index';
+diff --git a/apps/web/src/utils/poseMapping.ts b/apps/web/src/utils/poseMapping.ts
+new file mode 100644
+index 0000000000000000000000000000000000000000..bffe95aa09bc08e31da0db9d764fd6ce4ad35baf
+--- /dev/null
++++ b/apps/web/src/utils/poseMapping.ts
+@@ -0,0 +1,59 @@
++import type { BodyFrame, JointName } from '@trackeovrconia/proto';
++
++interface Landmark {
++  x: number;
++  y: number;
++  z: number;
++  visibility?: number;
++}
++
++export const mapLandmarksToFrame = (landmarks: Landmark[], timestamp: number): BodyFrame => {
++  const joints: BodyFrame['joints'] = {};
++  const average = (indices: number[]): Landmark | undefined => {
++    const found = indices.map((index) => landmarks[index]).filter(Boolean) as Landmark[];
++    if (!found.length) return undefined;
++    const sum = found.reduce(
++      (acc, item) => ({
++        x: acc.x + item.x,
++        y: acc.y + item.y,
++        z: acc.z + item.z,
++        visibility: (acc.visibility ?? 0) + (item.visibility ?? 1),
++      }),
++      { x: 0, y: 0, z: 0, visibility: 0 },
++    );
++    return {
++      x: sum.x / found.length,
++      y: sum.y / found.length,
++      z: sum.z / found.length,
++      visibility: (sum.visibility ?? 0) / found.length,
++    };
++  };
++
++  const mapSingle = (joint: JointName, index: number | number[]): void => {
++    const data = Array.isArray(index) ? average(index) : landmarks[index];
++    if (!data) return;
++    joints[joint] = {
++      pos: [data.x, data.y, data.z],
++      rotQuat: [0, 0, 0, 1],
++      conf: data.visibility ?? 1,
++    };
++  };
++
++  mapSingle('hip', [23, 24]);
++  mapSingle('chest', [11, 12]);
++  mapSingle('head', 0);
++  mapSingle('shoulder_l', 11);
++  mapSingle('elbow_l', 13);
++  mapSingle('wrist_l', 15);
++  mapSingle('shoulder_r', 12);
++  mapSingle('elbow_r', 14);
++  mapSingle('wrist_r', 16);
++  mapSingle('knee_l', 25);
++  mapSingle('ankle_l', 27);
++  mapSingle('foot_l', 31);
++  mapSingle('knee_r', 26);
++  mapSingle('ankle_r', 28);
++  mapSingle('foot_r', 32);
++
++  return { timestamp, joints };
++};
+diff --git a/apps/web/src/views/App.test.tsx b/apps/web/src/views/App.test.tsx
+new file mode 100644
+index 0000000000000000000000000000000000000000..1dc5384753fa14c249a972090b5a1d39bf01319e
+--- /dev/null
++++ b/apps/web/src/views/App.test.tsx
+@@ -0,0 +1,17 @@
++import '@testing-library/jest-dom/vitest';
++import { render, screen } from '@testing-library/react';
++import { vi } from 'vitest';
++vi.mock('./StudioView', () => ({
++  default: () => <div data-testid="studio-view" />,
++}));
++vi.mock('../hooks/useServerConfig', () => ({
++  useServerConfig: () => ({ updateVideoConfig: vi.fn() }),
++}));
++import App from './App';
++
++describe('App', () => {
++  it('renders studio header', () => {
++    render(<App />);
++    expect(screen.getByText(/Trackeovrconia Studio/i)).toBeInTheDocument();
++  });
++});
+diff --git a/apps/web/src/views/App.tsx b/apps/web/src/views/App.tsx
+new file mode 100644
+index 0000000000000000000000000000000000000000..3fd999dd5624fd9d45cbfc8073443f6b345438f3
+--- /dev/null
++++ b/apps/web/src/views/App.tsx
+@@ -0,0 +1,41 @@
++import AISmoothPanel from '../components/AISmoothPanel';
++import CameraPanel from '../components/CameraPanel';
++import MetricsPanel from '../components/MetricsPanel';
++import SinksManager from '../components/SinksManager';
++import SmoothingPanel from '../components/SmoothingPanel';
++import StudioView from './StudioView';
++
++const App = () => {
++  return (
++    <div className="min-h-screen bg-slate-900 text-slate-100">
++      <header className="border-b border-slate-800 bg-slate-950/60 backdrop-blur">
++        <div className="mx-auto flex max-w-6xl items-center justify-between px-6 py-4">
++          <div>
++            <h1 className="text-2xl font-bold">Trackeovrconia Studio</h1>
++            <p className="text-sm text-slate-400">
++              Tracking full-body con MediaPipe, AI Smooth FPS y salida OSC/SlimeVR
++            </p>
++          </div>
++          <div className="flex gap-2 text-xs text-slate-400">
++            <span>GPU Ready</span>
++            <span>WebGL/WebGPU</span>
++          </div>
++        </div>
++      </header>
++      <main className="mx-auto flex max-w-6xl flex-col gap-6 px-6 py-6">
++        <StudioView />
++        <div className="grid gap-6 md:grid-cols-2 lg:grid-cols-3">
++          <CameraPanel />
++          <AISmoothPanel />
++          <MetricsPanel />
++        </div>
++        <div className="grid gap-6 md:grid-cols-2">
++          <SmoothingPanel />
++          <SinksManager />
++        </div>
++      </main>
++    </div>
++  );
++};
++
++export default App;
+diff --git a/apps/web/src/views/StudioView.tsx b/apps/web/src/views/StudioView.tsx
+new file mode 100644
+index 0000000000000000000000000000000000000000..5a3f8ad9f8d62d7d6b06d7ece9076cd5ebdf2365
+--- /dev/null
++++ b/apps/web/src/views/StudioView.tsx
+@@ -0,0 +1,171 @@
++import { useEffect, useMemo, useRef } from 'react';
++import * as THREE from 'three';
++import { useTracking } from '../hooks/useTracking';
++import { useAppStore } from '../state/store';
++import { jointNames, type JointName } from '@trackeovrconia/proto';
++
++const skeletonConnections: Array<[JointName, JointName]> = [
++  ['hip', 'chest'],
++  ['chest', 'head'],
++  ['chest', 'shoulder_l'],
++  ['shoulder_l', 'elbow_l'],
++  ['elbow_l', 'wrist_l'],
++  ['chest', 'shoulder_r'],
++  ['shoulder_r', 'elbow_r'],
++  ['elbow_r', 'wrist_r'],
++  ['hip', 'knee_l'],
++  ['knee_l', 'ankle_l'],
++  ['ankle_l', 'foot_l'],
++  ['hip', 'knee_r'],
++  ['knee_r', 'ankle_r'],
++  ['ankle_r', 'foot_r'],
++];
++
++const StudioView = () => {
++  const { videoRef, overlayRef, startTracking, stopTracking, trackingActive, trackingError, secureContext } =
++    useTracking('/models');
++  const canvasRef = useRef<HTMLCanvasElement | null>(null);
++  const frame = useAppStore((state) => state.lastFrame);
++  const pointsRef = useRef<Record<string, THREE.Mesh>>({});
++  const lineGeometryRef = useRef<THREE.BufferGeometry>();
++  const animationRef = useRef<number>();
++
++  useEffect(() => {
++    if (!canvasRef.current) return;
++    const scene = new THREE.Scene();
++    scene.background = new THREE.Color('#020617');
++    const camera = new THREE.PerspectiveCamera(50, 1, 0.1, 5);
++    camera.position.set(0, 0, 2.2);
++    const renderer = new THREE.WebGLRenderer({ canvas: canvasRef.current, antialias: true, alpha: true });
++    renderer.setPixelRatio(window.devicePixelRatio || 1);
++    const resize = () => {
++      if (!canvasRef.current) return;
++      const { clientWidth, clientHeight } = canvasRef.current;
++      camera.aspect = clientWidth / clientHeight;
++      camera.updateProjectionMatrix();
++      renderer.setSize(clientWidth, clientHeight, false);
++    };
++    resize();
++    const resizeObserver = new ResizeObserver(resize);
++    resizeObserver.observe(canvasRef.current);
++    const light = new THREE.DirectionalLight(0xffffff, 1.1);
++    light.position.set(0.3, 1, 1);
++    scene.add(new THREE.AmbientLight(0xffffff, 0.4));
++    scene.add(light);
++    const material = new THREE.MeshStandardMaterial({ color: '#38bdf8' });
++    const geometry = new THREE.SphereGeometry(0.025, 16, 16);
++    jointNames.forEach((joint: JointName) => {
++      const mesh = new THREE.Mesh(geometry, material.clone());
++      mesh.visible = false;
++      scene.add(mesh);
++      pointsRef.current[joint] = mesh;
++    });
++
++    const linePositions = new Float32Array(skeletonConnections.length * 2 * 3);
++    const lineGeometry = new THREE.BufferGeometry();
++    lineGeometry.setAttribute('position', new THREE.BufferAttribute(linePositions, 3));
++    const lineMaterial = new THREE.LineBasicMaterial({ color: '#f472b6' });
++    const skeleton = new THREE.LineSegments(lineGeometry, lineMaterial);
++    scene.add(skeleton);
++    lineGeometryRef.current = lineGeometry;
++
++    const animate = () => {
++      renderer.render(scene, camera);
++      animationRef.current = requestAnimationFrame(animate);
++    };
++    animate();
++
++    return () => {
++      resizeObserver.disconnect();
++      if (animationRef.current) {
++        cancelAnimationFrame(animationRef.current);
++      }
++      lineGeometry.dispose();
++      lineMaterial.dispose();
++      skeleton.removeFromParent();
++      geometry.dispose();
++      material.dispose();
++      renderer.dispose();
++      pointsRef.current = {};
++    };
++  }, []);
++
++  useEffect(() => {
++    if (!frame) return;
++    const lineGeometry = lineGeometryRef.current;
++    const positions = lineGeometry?.getAttribute('position');
++    jointNames.forEach((joint: JointName) => {
++      const data = frame.joints[joint];
++      const mesh = pointsRef.current[joint];
++      if (!mesh) return;
++      if (!data) {
++        mesh.visible = false;
++        return;
++      }
++      mesh.visible = true;
++      const [x, y, z] = data.pos ?? [0, 0, 0];
++      mesh.position.set((x - 0.5) * 2, (0.5 - y) * 2, -z);
++    });
++    if (positions && positions instanceof THREE.BufferAttribute) {
++      skeletonConnections.forEach(([a, b], index) => {
++        const start = frame.joints[a]?.pos;
++        const end = frame.joints[b]?.pos;
++        const vertexIndex = index * 2;
++        if (start && end) {
++          positions.setXYZ(vertexIndex, (start[0] - 0.5) * 2, (0.5 - start[1]) * 2, -start[2]);
++          positions.setXYZ(vertexIndex + 1, (end[0] - 0.5) * 2, (0.5 - end[1]) * 2, -end[2]);
++        } else {
++          positions.setXYZ(vertexIndex, 0, 0, 0);
++          positions.setXYZ(vertexIndex + 1, 0, 0, 0);
++        }
++      });
++      positions.needsUpdate = true;
++    }
++  }, [frame]);
++
++  const trackingCTA = useMemo(() => (trackingActive ? 'Detener tracking' : 'Iniciar tracking'), [trackingActive]);
++
++  return (
++    <div className="grid gap-4 lg:grid-cols-2">
++      <div className="relative overflow-hidden rounded-xl border border-slate-700">
++        <video ref={videoRef} className="h-full w-full bg-black" playsInline muted></video>
++        <canvas ref={overlayRef} className="absolute inset-0" width={640} height={480}></canvas>
++        <div className="pointer-events-none absolute inset-0 bg-gradient-to-t from-slate-950/40 to-transparent"></div>
++        <div className="absolute left-4 top-4 flex flex-col gap-2">
++          <button
++            type="button"
++            onClick={trackingActive ? stopTracking : startTracking}
++            className={`pointer-events-auto rounded-full px-4 py-2 text-sm font-medium shadow transition focus:outline-none focus-visible:ring ${
++              trackingActive
++                ? 'bg-rose-500/90 text-white hover:bg-rose-500'
++                : 'bg-emerald-500/90 text-white hover:bg-emerald-500'
++            }`}
++            disabled={!secureContext}
++          >
++            {trackingCTA}
++          </button>
++          {!secureContext && (
++            <span className="pointer-events-none rounded bg-slate-900/80 px-3 py-1 text-xs text-slate-200">
++              Necesitas servir la app sobre HTTPS o localhost para permitir el acceso a la cámara.
++            </span>
++          )}
++          {trackingError && <span className="pointer-events-auto rounded bg-amber-500/20 px-3 py-1 text-xs text-amber-200">{trackingError}</span>}
++          {!trackingError && trackingActive && (
++            <span className="pointer-events-none rounded bg-emerald-500/20 px-3 py-1 text-xs text-emerald-100">
++              Tracking en vivo
++            </span>
++          )}
++        </div>
++      </div>
++      <div className="rounded-xl border border-slate-700 bg-slate-900 p-4">
++        <header className="mb-2 flex items-center justify-between">
++          <h3 className="text-lg font-semibold">Vista 3D</h3>
++          <span className="text-xs text-slate-400">Modo Studio</span>
++        </header>
++        <canvas ref={canvasRef} className="h-64 w-full"></canvas>
++      </div>
++    </div>
++  );
++};
++
++export default StudioView;
+diff --git a/apps/web/src/workers/trackingWorker.ts b/apps/web/src/workers/trackingWorker.ts
+new file mode 100644
+index 0000000000000000000000000000000000000000..44c22c8ea2e61809a376743e9c307b2aa318c02b
+--- /dev/null
++++ b/apps/web/src/workers/trackingWorker.ts
+@@ -0,0 +1,197 @@
++import { FilesetResolver, PoseLandmarker, DrawingUtils } from '@mediapipe/tasks-vision';
++import { AdaptiveFrameInterpolator } from '@trackeovrconia/video-afi';
++import { mapLandmarksToFrame } from '../utils/poseMapping';
++
++interface InitMessage {
++  type: 'init';
++  canvas?: OffscreenCanvas;
++  modelAssetPath: string;
++  video: {
++    targetFps: number;
++    aiSmooth: 'auto' | 'on' | 'off';
++    sr: 'off' | 'auto';
++  };
++}
++
++interface FrameMessage {
++  type: 'frame';
++  frame: ImageBitmap;
++  timestamp: number;
++  cameraFps: number;
++}
++
++interface MetricsPayload {
++  cameraFps: number;
++  effectiveFps: number;
++  afiMultiplier?: number;
++  srEnabled?: boolean;
++  gpuBackend?: string;
++  addedLatencyMs?: number;
++}
++
++type WorkerMessage = InitMessage | FrameMessage;
++
++type WorkerResponse =
++  | { type: 'pose'; frame: ReturnType<typeof mapLandmarksToFrame>; metrics: MetricsPayload }
++  | { type: 'metrics'; metrics: MetricsPayload }
++  | { type: 'error'; message: string };
++
++declare const self: any;
++
++let landmarker: PoseLandmarker | undefined;
++let interpolator: AdaptiveFrameInterpolator | undefined;
++let previewCtx: OffscreenCanvasRenderingContext2D | null = null;
++let modelBasePath: string | undefined;
++
++const DEFAULT_VISION_ASSETS = 'https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.7/wasm';
++const DEFAULT_POSE_MODEL =
++  'https://storage.googleapis.com/mediapipe-models/pose_landmarker/pose_landmarker_full/float16/latest/pose_landmarker_full.task';
++
++const sanitizeBasePath = (base?: string): string | undefined => {
++  if (!base) return undefined;
++  if (base.endsWith('/')) return base.slice(0, -1);
++  return base;
++};
++
++const resolveMetrics = (overrides: Partial<MetricsPayload>): MetricsPayload => ({
++  cameraFps: 0,
++  effectiveFps: 0,
++  srEnabled: false,
++  gpuBackend: 'cpu',
++  addedLatencyMs: 0,
++  ...overrides,
++});
++
++const renderSkeleton = (landmarks: any[], width: number, height: number) => {
++  if (!previewCtx) return;
++  if (previewCtx.canvas.width !== width || previewCtx.canvas.height !== height) {
++    previewCtx.canvas.width = width;
++    previewCtx.canvas.height = height;
++  }
++  previewCtx.clearRect(0, 0, width, height);
++  const drawingUtils = new DrawingUtils(previewCtx);
++  drawingUtils.drawConnectors(landmarks, PoseLandmarker.POSE_CONNECTIONS, {
++    color: '#4ade80',
++    lineWidth: 3,
++  });
++  drawingUtils.drawLandmarks(landmarks, { color: '#f97316', radius: 4 });
++};
++
++const ensureLandmarker = async () => {
++  if (landmarker) return;
++  const base = sanitizeBasePath(modelBasePath);
++  const wasmSource = base ?? DEFAULT_VISION_ASSETS;
++  try {
++    const fileset = await FilesetResolver.forVisionTasks(wasmSource);
++    const model = base ? `${base}/pose_landmarker_full.task` : DEFAULT_POSE_MODEL;
++    landmarker = await PoseLandmarker.createFromOptions(fileset, {
++      baseOptions: {
++        modelAssetPath: model,
++        delegate: 'GPU',
++      },
++      runningMode: 'VIDEO',
++      numPoses: 1,
++      minPoseDetectionConfidence: 0.4,
++    });
++  } catch (error) {
++    if (base) {
++      console.warn('Fallo al cargar recursos locales de MediaPipe, usando CDN por defecto', error);
++      const fileset = await FilesetResolver.forVisionTasks(DEFAULT_VISION_ASSETS);
++      landmarker = await PoseLandmarker.createFromOptions(fileset, {
++        baseOptions: {
++          modelAssetPath: DEFAULT_POSE_MODEL,
++          delegate: 'GPU',
++        },
++        runningMode: 'VIDEO',
++        numPoses: 1,
++        minPoseDetectionConfidence: 0.4,
++      });
++      return;
++    }
++    throw error;
++  }
++};
++
++self.onmessage = async (event: MessageEvent<WorkerMessage>) => {
++  if (event.data.type === 'init') {
++    const { canvas, modelAssetPath, video } = event.data;
++    previewCtx = canvas ? canvas.getContext('2d') : null;
++    modelBasePath = sanitizeBasePath(modelAssetPath);
++    try {
++      await ensureLandmarker();
++    } catch (error) {
++      console.error('No se pudo inicializar MediaPipe Pose', error);
++      self.postMessage({ type: 'error', message: 'No se pudo inicializar el modelo de pose.' } satisfies WorkerResponse);
++      return;
++    }
++    if (video.aiSmooth !== 'off' && modelBasePath && typeof VideoFrame !== 'undefined') {
++      interpolator = new AdaptiveFrameInterpolator({
++        modelUrl: `${modelBasePath}/rife-lite.onnx`,
++        targetFps: video.targetFps,
++        maxMultiplier: video.aiSmooth === 'on' ? 3 : 2,
++      });
++    } else {
++      interpolator = undefined;
++    }
++    return;
++  }
++
++  if (!landmarker) {
++    return;
++  }
++
++  const { frame, timestamp, cameraFps } = event.data;
++  const baseMetrics = resolveMetrics({ cameraFps, effectiveFps: cameraFps });
++  let metrics = baseMetrics;
++  try {
++    const supportsVideoFrame = typeof VideoFrame !== 'undefined';
++    const videoFrame = supportsVideoFrame ? new VideoFrame(frame, { timestamp }) : frame;
++    let inferenceFrame: typeof videoFrame = videoFrame;
++    if (interpolator && supportsVideoFrame && videoFrame instanceof VideoFrame) {
++      try {
++        const result = await interpolator.interpolate({ prev: videoFrame, next: videoFrame }, cameraFps);
++        metrics = resolveMetrics({
++          cameraFps,
++          effectiveFps: result.multiplier * cameraFps,
++          afiMultiplier: result.multiplier > 1 ? result.multiplier : undefined,
++          srEnabled: false,
++          gpuBackend: result.backend === 'disabled' ? 'cpu' : result.backend,
++          addedLatencyMs: result.latencyMs,
++        });
++        if (result.frames.length > 0) {
++          inferenceFrame = result.frames[result.frames.length - 1];
++        }
++        result.frames.forEach((generated: typeof videoFrame) => {
++          if (generated !== inferenceFrame && generated !== videoFrame && generated instanceof VideoFrame) {
++            generated.close();
++          }
++        });
++      } catch (error) {
++        console.warn('Interpolador AFI deshabilitado por error', error);
++        interpolator = undefined;
++        metrics = baseMetrics;
++      }
++    }
++
++    const result = await landmarker.detectForVideo(inferenceFrame, timestamp);
++    if (result.landmarks?.length) {
++      renderSkeleton(result.landmarks[0], frame.width, frame.height);
++      const bodyFrame = mapLandmarksToFrame(result.landmarks[0], timestamp);
++      self.postMessage({ type: 'pose', frame: bodyFrame, metrics } satisfies WorkerResponse);
++    } else {
++      self.postMessage({ type: 'metrics', metrics } satisfies WorkerResponse);
++    }
++
++    if (supportsVideoFrame && inferenceFrame !== videoFrame && inferenceFrame instanceof VideoFrame) {
++      inferenceFrame.close();
++    }
++    if (supportsVideoFrame && videoFrame instanceof VideoFrame) {
++      videoFrame.close();
++    }
++  } catch (error) {
++    console.error('Error procesando frame', error);
++    self.postMessage({ type: 'error', message: (error as Error).message } satisfies WorkerResponse);
++  } finally {
++    frame.close();
++  }
++};
+diff --git a/apps/web/tailwind.config.ts b/apps/web/tailwind.config.ts
+new file mode 100644
+index 0000000000000000000000000000000000000000..6afcd16fd28a6c5c2d7cd2a37a2b500b2bb5ecd0
+--- /dev/null
++++ b/apps/web/tailwind.config.ts
+@@ -0,0 +1,11 @@
++import type { Config } from 'tailwindcss';
++
++const config: Config = {
++  content: ['./index.html', './src/**/*.{ts,tsx}'],
++  theme: {
++    extend: {},
++  },
++  plugins: [],
++};
++
++export default config;
+diff --git a/apps/web/tsconfig.json b/apps/web/tsconfig.json
+new file mode 100644
+index 0000000000000000000000000000000000000000..4b30468583fd0baa57209bdeba0ed8c2c159e95a
+--- /dev/null
++++ b/apps/web/tsconfig.json
+@@ -0,0 +1,25 @@
++{
++  "extends": "../../tsconfig.base.json",
++  "compilerOptions": {
++    "jsx": "react-jsx",
++    "baseUrl": "./src",
++    "types": ["vitest/globals", "vite/client"],
++    "module": "ESNext",
++    "moduleResolution": "Bundler",
++    "skipLibCheck": true,
++    "paths": {
++      "@trackeovrconia/proto": ["types/proto"],
++      "@trackeovrconia/utils": ["types/utils"],
++      "@trackeovrconia/video-afi": ["types/video-afi"]
++    }
++  },
++  "include": [
++    "src",
++    "vite.config.ts",
++    "vitest.config.ts",
++    "tailwind.config.ts",
++    "postcss.config.js",
++    "scripts/**/*.d.ts"
++  ],
++  "exclude": ["dist"]
++}
+diff --git a/apps/web/vite.config.ts b/apps/web/vite.config.ts
+new file mode 100644
+index 0000000000000000000000000000000000000000..90912e98440c04edd145889672a9a8262ec10e21
+--- /dev/null
++++ b/apps/web/vite.config.ts
+@@ -0,0 +1,88 @@
++import { defineConfig } from 'vite';
++import react from '@vitejs/plugin-react';
++import basicSsl from '@vitejs/plugin-basic-ssl';
++import httpProxy from 'http-proxy';
++import { fileURLToPath } from 'url';
++import { dirname, resolve as resolvePath } from 'path';
++
++const rootDir = dirname(fileURLToPath(import.meta.url));
++const alias = {
++  '@trackeovrconia/proto': resolvePath(rootDir, 'src/types/proto.ts'),
++  '@trackeovrconia/utils': resolvePath(rootDir, 'src/types/utils.ts'),
++  '@trackeovrconia/video-afi': resolvePath(rootDir, 'src/types/video-afi.ts'),
++};
++
++export default defineConfig({
++  plugins: [mediapipeAssets(), basicSsl(), react(), previewProxy()],
++  resolve: {
++    alias,
++  },
++  server: {
++    host: '0.0.0.0',
++    port: 5173,
++    https: {},
++    strictPort: true,
++    proxy: {
++      '/api': 'http://localhost:4000',
++      '/ws': {
++        target: 'ws://localhost:4000',
++        ws: true,
++      },
++    },
++  },
++  preview: {
++    host: '0.0.0.0',
++    port: 5173,
++    strictPort: true,
++    https: {},
++  },
++  worker: {
++    format: 'iife',
++  },
++});
++
++function mediapipeAssets() {
++  return {
++    name: 'mediapipe-assets',
++    async configResolved() {
++      // @ts-expect-error - helper script is ESM-only without TypeScript declarations
++      const mod = await import('./scripts/sync-mediapipe-assets.mjs');
++      if (typeof mod.syncMediaPipeAssets === 'function') {
++        await mod.syncMediaPipeAssets();
++      }
++    },
++  } satisfies import('vite').PluginOption;
++}
++
++function previewProxy() {
++  return {
++    name: 'preview-proxy',
++    configurePreviewServer(server: import('vite').PreviewServer) {
++      const targetHost = process.env.SERVER_HOST ?? 'localhost';
++      const targetPort = Number(process.env.SERVER_PORT ?? '4000');
++      const proxy = httpProxy.createProxyServer({ changeOrigin: true, secure: false });
++      const targetHttp = `http://${targetHost}:${targetPort}`;
++      const targetWs = `ws://${targetHost}:${targetPort}`;
++      proxy.on('error', (error: NodeJS.ErrnoException) => {
++        console.error('Proxy error', error);
++      });
++      server.middlewares.use((req, res, next) => {
++        if (!req.url) return next();
++        if (req.url.startsWith('/api')) {
++          proxy.web(req, res, { target: targetHttp }, (error: Error & { code?: string }) => {
++            console.error('Proxy error', error);
++            next(error as unknown as Error);
++          });
++          return;
++        }
++        next();
++      });
++      server.httpServer?.on('upgrade', (req, socket, head) => {
++        if (!req.url?.startsWith('/ws')) {
++          return;
++        }
++        proxy.ws(req, socket, head, { target: `${targetWs}${req.url}` });
++      });
++    },
++  } satisfies import('vite').PluginOption;
++}
+diff --git a/apps/web/vitest.config.ts b/apps/web/vitest.config.ts
+new file mode 100644
+index 0000000000000000000000000000000000000000..875ecd3f30d2a4a3e4212b62a4d71eb31fb8f53b
+--- /dev/null
++++ b/apps/web/vitest.config.ts
+@@ -0,0 +1,23 @@
++import { defineConfig } from 'vitest/config';
++import react from '@vitejs/plugin-react';
++import { fileURLToPath } from 'url';
++import { dirname, resolve as resolvePath } from 'path';
++
++const rootDir = dirname(fileURLToPath(import.meta.url));
++const alias = {
++  '@trackeovrconia/proto': resolvePath(rootDir, 'src/types/proto.ts'),
++  '@trackeovrconia/utils': resolvePath(rootDir, 'src/types/utils.ts'),
++  '@trackeovrconia/video-afi': resolvePath(rootDir, 'src/types/video-afi.ts'),
++};
++
++export default defineConfig({
++  plugins: [react()],
++  resolve: {
++    alias,
++  },
++  test: {
++    environment: 'jsdom',
++    setupFiles: ['./vitest.setup.ts'],
++    globals: true,
++  },
++});
+diff --git a/apps/web/vitest.setup.ts b/apps/web/vitest.setup.ts
+new file mode 100644
+index 0000000000000000000000000000000000000000..99bbad99c52ea1abe419109b53d1feff99232a95
+--- /dev/null
++++ b/apps/web/vitest.setup.ts
+@@ -0,0 +1,9 @@
++import '@testing-library/jest-dom/vitest';
++import { vi } from 'vitest';
++
++if (!global.fetch) {
++  global.fetch = vi.fn(async () => ({
++    ok: true,
++    json: async () => ({}),
++  })) as unknown as typeof fetch;
++}
+diff --git a/docker-compose.yml b/docker-compose.yml
+new file mode 100644
+index 0000000000000000000000000000000000000000..224257416056c5a09cd1ff9b4851a56bbb3eadb8
+--- /dev/null
++++ b/docker-compose.yml
+@@ -0,0 +1,12 @@
++version: '3.9'
++services:
++  trackeovrconia:
++    build: .
++    ports:
++      - '4000:4000'
++    environment:
++      PORT: 4000
++    volumes:
++      - ./config:/app/config
++      - ./sessions:/app/sessions
++      - ./apps/web/public/models:/app/apps/web/public/models
+diff --git a/package.json b/package.json
+new file mode 100644
+index 0000000000000000000000000000000000000000..3da6fa26a4ac8645712bf6132cc8c3982d5ee0c5
+--- /dev/null
++++ b/package.json
+@@ -0,0 +1,20 @@
++{
++  "name": "trackeovrconia",
++  "private": true,
++  "packageManager": "pnpm@8.15.3",
++  "scripts": {
++    "dev": "pnpm -r --stream dev",
++    "build": "pnpm -r build",
++    "start": "pnpm build && pnpm --filter server start",
++    "lint": "pnpm -r lint",
++    "test": "pnpm -r test",
++    "format": "pnpm -r format",
++    "postinstall": "node apps/web/scripts/sync-mediapipe-assets.mjs",
++    "clean:models": "node apps/web/scripts/sync-mediapipe-assets.mjs --clean"
++  },
++  "workspaces": [
++    "apps/*",
++    "packages/*",
++    "tools"
++  ]
++}
+diff --git a/packages/proto/package.json b/packages/proto/package.json
+new file mode 100644
+index 0000000000000000000000000000000000000000..2fcb695519da2a430c89f3edbf4dda93867cac0d
+--- /dev/null
++++ b/packages/proto/package.json
+@@ -0,0 +1,27 @@
++{
++  "name": "@trackeovrconia/proto",
++  "version": "0.1.0",
++  "main": "dist/index.js",
++  "types": "dist/index.d.ts",
++  "type": "module",
++  "scripts": {
++    "build": "tsup src/index.ts --format esm,cjs --dts",
++    "dev": "tsup src/index.ts --format esm --watch",
++    "lint": "eslint src --ext .ts",
++    "test": "vitest run --passWithNoTests",
++    "clean": "rm -rf dist"
++  },
++  "files": ["dist"],
++  "dependencies": {
++    "zod": "^3.23.8"
++  },
++  "devDependencies": {
++    "tsup": "^7.2.0",
++    "typescript": "^5.3.3",
++    "vitest": "^1.2.2",
++    "@types/node": "^20.11.0",
++    "eslint": "^8.56.0",
++    "@typescript-eslint/parser": "^6.17.0",
++    "@typescript-eslint/eslint-plugin": "^6.17.0"
++  }
++}
+diff --git a/packages/proto/src/index.ts b/packages/proto/src/index.ts
+new file mode 100644
+index 0000000000000000000000000000000000000000..4220097fa873caeedf8ae77abbf6a93a3d863245
+--- /dev/null
++++ b/packages/proto/src/index.ts
+@@ -0,0 +1,142 @@
++import { z } from 'zod';
++
++export const jointNames = [
++  'hip',
++  'chest',
++  'head',
++  'shoulder_l',
++  'elbow_l',
++  'wrist_l',
++  'shoulder_r',
++  'elbow_r',
++  'wrist_r',
++  'knee_l',
++  'ankle_l',
++  'foot_l',
++  'knee_r',
++  'ankle_r',
++  'foot_r',
++] as const;
++
++export const vector3Schema = z.tuple([z.number(), z.number(), z.number()]);
++export const quaternionSchema = z.tuple([
++  z.number(),
++  z.number(),
++  z.number(),
++  z.number(),
++]);
++
++export const jointSchema = z.object({
++  pos: vector3Schema,
++  rotQuat: quaternionSchema,
++  conf: z.number().min(0).max(1),
++});
++
++export const bodyFrameSchema = z.object({
++  timestamp: z.number().nonnegative(),
++  joints: z.record(z.enum(jointNames), jointSchema.partial({
++    pos: true,
++    rotQuat: true,
++    conf: true,
++  })).default({}),
++});
++
++export type JointName = (typeof jointNames)[number];
++export type Vector3 = z.infer<typeof vector3Schema>;
++export type Quaternion = z.infer<typeof quaternionSchema>;
++export type Joint = z.infer<typeof jointSchema>;
++export type BodyFrame = z.infer<typeof bodyFrameSchema>;
++
++export const trackingMessageSchema = z.object({
++  type: z.literal('tracking'),
++  payload: bodyFrameSchema,
++});
++
++export const monitorMessageSchema = z.object({
++  cameraFps: z.number(),
++  effectiveFps: z.number(),
++  afiMultiplier: z.number().optional(),
++  srEnabled: z.boolean().optional(),
++  gpuBackend: z.string().optional(),
++  addedLatencyMs: z.number().optional(),
++});
++
++export const smoothingConfigSchema = z.object({
++  filter: z.enum(['one-euro', 'kalman']),
++  beta: z.number().optional(),
++  minCutoff: z.number().optional(),
++  r: z.number().optional(),
++  q: z.number().optional(),
++});
++
++export const oscSinkSchema = z.object({
++  id: z.string(),
++  type: z.literal('osc'),
++  host: z.string(),
++  port: z.number(),
++  namespace: z.string().default('/body'),
++  flat: z.boolean().default(false),
++});
++
++export const slimeVrSinkSchema = z.object({
++  id: z.string(),
++  type: z.literal('slimevr'),
++  host: z.string(),
++  port: z.number(),
++  profileId: z.string(),
++});
++
++export const sinkSchema = z.discriminatedUnion('type', [
++  oscSinkSchema,
++  slimeVrSinkSchema,
++]);
++
++export const serverConfigSchema = z.object({
++  smoothing: smoothingConfigSchema,
++  sinks: z.array(sinkSchema).default([]),
++  video: z.object({
++    targetFps: z.number().default(60),
++    aiSmooth: z.enum(['auto', 'on', 'off']).default('auto'),
++    sr: z.enum(['off', 'auto']).default('off'),
++    serverAfiUrl: z.string().optional(),
++  }),
++  studio: z.object({
++    monitorEnabled: z.boolean().default(true),
++  }),
++});
++
++export type OscSink = z.infer<typeof oscSinkSchema>;
++export type SlimeVrSink = z.infer<typeof slimeVrSinkSchema>;
++export type Sink = z.infer<typeof sinkSchema>;
++export type ServerConfig = z.infer<typeof serverConfigSchema>;
++
++export const defaultConfig: ServerConfig = {
++  smoothing: {
++    filter: 'one-euro',
++    beta: 0.01,
++    minCutoff: 1.0,
++  },
++  sinks: [],
++  video: {
++    targetFps: 60,
++    aiSmooth: 'auto',
++    sr: 'off',
++  },
++  studio: {
++    monitorEnabled: true,
++  },
++};
++
++export const configFileSchema = z.object({
++  server: serverConfigSchema,
++  slimevr: z.object({
++    trackers: z.record(z.string(), z.object({
++      joint: z.enum(jointNames),
++      offset: vector3Schema.default([0, 0, 0]),
++      yaw: z.number().default(0),
++      roll: z.number().default(0),
++    })),
++  }).default({ trackers: {} }),
++});
++
++export type ConfigFile = z.infer<typeof configFileSchema>;
+diff --git a/packages/proto/tsconfig.json b/packages/proto/tsconfig.json
+new file mode 100644
+index 0000000000000000000000000000000000000000..cc019fc462908f77ec493b9eff0976f0b7fc6d9d
+--- /dev/null
++++ b/packages/proto/tsconfig.json
+@@ -0,0 +1,10 @@
++{
++  "extends": "../../tsconfig.base.json",
++  "compilerOptions": {
++    "outDir": "dist",
++    "declaration": true,
++    "declarationMap": true,
++    "emitDeclarationOnly": false
++  },
++  "include": ["src"]
++}
+diff --git a/packages/utils/package.json b/packages/utils/package.json
+new file mode 100644
+index 0000000000000000000000000000000000000000..df0a0f58d180452118e18172b8cb0b4a8b39369a
+--- /dev/null
++++ b/packages/utils/package.json
+@@ -0,0 +1,27 @@
++{
++  "name": "@trackeovrconia/utils",
++  "version": "0.1.0",
++  "main": "dist/index.js",
++  "types": "dist/index.d.ts",
++  "type": "module",
++  "scripts": {
++    "build": "tsup src/index.ts --format esm,cjs --dts",
++    "dev": "tsup src/index.ts --format esm --watch",
++    "lint": "eslint src --ext .ts",
++    "test": "vitest run",
++    "clean": "rm -rf dist"
++  },
++  "dependencies": {
++    "@trackeovrconia/proto": "workspace:*",
++    "@msgpack/msgpack": "^3.0.0"
++  },
++  "devDependencies": {
++    "tsup": "^7.2.0",
++    "typescript": "^5.3.3",
++    "vitest": "^1.2.2",
++    "@types/node": "^20.11.0",
++    "eslint": "^8.56.0",
++    "@typescript-eslint/parser": "^6.17.0",
++    "@typescript-eslint/eslint-plugin": "^6.17.0"
++  }
++}
+diff --git a/packages/utils/src/filters.ts b/packages/utils/src/filters.ts
+new file mode 100644
+index 0000000000000000000000000000000000000000..a09e06a2aa27ce45cb1db21d47ee4a9ae7204d0a
+--- /dev/null
++++ b/packages/utils/src/filters.ts
+@@ -0,0 +1,103 @@
++export interface OneEuroFilterConfig {
++  minCutoff: number;
++  beta: number;
++  dCutoff: number;
++}
++
++class LowPassFilter {
++  private alpha: number;
++  private prev?: number;
++
++  constructor(alpha: number) {
++    this.alpha = alpha;
++  }
++
++  filter(value: number): number {
++    if (this.prev === undefined) {
++      this.prev = value;
++      return value;
++    }
++    const result = this.alpha * value + (1 - this.alpha) * this.prev;
++    this.prev = result;
++    return result;
++  }
++
++  setAlpha(alpha: number) {
++    this.alpha = alpha;
++  }
++}
++
++export class OneEuroFilter {
++  private readonly config: OneEuroFilterConfig;
++  private readonly freq: number;
++  private readonly valueFilters: Map<string, LowPassFilter> = new Map();
++  private readonly derivFilters: Map<string, LowPassFilter> = new Map();
++  private readonly lastTime: Map<string, number> = new Map();
++
++  constructor(freq: number, config: Partial<OneEuroFilterConfig> = {}) {
++    this.freq = freq;
++    this.config = {
++      minCutoff: config.minCutoff ?? 1.0,
++      beta: config.beta ?? 0.01,
++      dCutoff: config.dCutoff ?? 1.0,
++    };
++  }
++
++  private alpha(cutoff: number, dt: number): number {
++    const tau = 1 / (2 * Math.PI * cutoff);
++    return 1 / (1 + tau / dt);
++  }
++
++  filterVector(id: string, values: number[], timestamp: number): number[] {
++    const prevTime = this.lastTime.get(id) ?? timestamp;
++    const dt = Math.max((timestamp - prevTime) / 1000, 1 / this.freq);
++    this.lastTime.set(id, timestamp);
++
++    const vFilters = this.valueFilters.get(id) ?? new LowPassFilter(1);
++    const dFilters = this.derivFilters.get(id) ?? new LowPassFilter(1);
++    this.valueFilters.set(id, vFilters);
++    this.derivFilters.set(id, dFilters);
++
++    return values.map((value, index) => {
++      const prev = vFilters.filter(value);
++      const deriv = (value - prev) * this.freq;
++      dFilters.setAlpha(this.alpha(this.config.dCutoff, dt));
++      const dValue = dFilters.filter(deriv);
++      const cutoff = this.config.minCutoff + this.config.beta * Math.abs(dValue);
++      vFilters.setAlpha(this.alpha(cutoff, dt));
++      return vFilters.filter(value);
++    });
++  }
++}
++
++export interface KalmanConfig {
++  r: number;
++  q: number;
++}
++
++export class KalmanFilter {
++  private readonly config: KalmanConfig;
++  private readonly state: Map<string, { value: number; p: number }[]> = new Map();
++
++  constructor(config: Partial<KalmanConfig> = {}) {
++    this.config = {
++      r: config.r ?? 0.01,
++      q: config.q ?? 1,
++    };
++  }
++
++  filterVector(id: string, values: number[]): number[] {
++    const previous = this.state.get(id) ?? values.map((value) => ({ value, p: 1 }));
++    const result = values.map((value, index) => {
++      const { value: prevValue, p } = previous[index];
++      const pPred = p + this.config.q;
++      const k = pPred / (pPred + this.config.r);
++      const newValue = prevValue + k * (value - prevValue);
++      const newP = (1 - k) * pPred;
++      previous[index] = { value: newValue, p: newP };
++      return newValue;
++    });
++    this.state.set(id, previous);
++    return result;
++  }
++}
+diff --git a/packages/utils/src/index.test.ts b/packages/utils/src/index.test.ts
+new file mode 100644
+index 0000000000000000000000000000000000000000..8062c51199fd54f833320672ad39c7085cdcd509
+--- /dev/null
++++ b/packages/utils/src/index.test.ts
+@@ -0,0 +1,18 @@
++import { describe, expect, it } from 'vitest';
++import { OneEuroFilter, stableFps } from './index.js';
++
++describe('stableFps', () => {
++  it('boosts fps when camera is slow', () => {
++    expect(stableFps(24)).toBe(60);
++    expect(stableFps(30)).toBe(60);
++  });
++});
++
++describe('OneEuroFilter', () => {
++  it('smooths noisy data', () => {
++    const filter = new OneEuroFilter(60, { beta: 0.02, minCutoff: 1 });
++    const noisy = [0, 1, 0.5, 0.1, 0.9];
++    const filtered = noisy.map((value, index) => filter.filterVector('joint', [value, value, value], index * 16)[0]);
++    expect(filtered[filtered.length - 1]).toBeLessThan(0.9);
++  });
++});
+diff --git a/packages/utils/src/index.ts b/packages/utils/src/index.ts
+new file mode 100644
+index 0000000000000000000000000000000000000000..5118ab5d5f0ed0287a550d7bc2edb9ab071e2e70
+--- /dev/null
++++ b/packages/utils/src/index.ts
+@@ -0,0 +1,16 @@
++export * from './filters.js';
++
++export interface FrameMetrics {
++  cameraFps: number;
++  effectiveFps: number;
++  afiMultiplier?: number;
++  srEnabled?: boolean;
++  gpuBackend?: string;
++  addedLatencyMs?: number;
++}
++
++export const stableFps = (cameraFps: number, target = 60): number => {
++  if (cameraFps >= target) return target;
++  const multiplier = Math.min(3, Math.max(2, Math.ceil(target / Math.max(1, cameraFps))));
++  return Math.min(target, cameraFps * multiplier);
++};
+diff --git a/packages/utils/tsconfig.json b/packages/utils/tsconfig.json
+new file mode 100644
+index 0000000000000000000000000000000000000000..cc019fc462908f77ec493b9eff0976f0b7fc6d9d
+--- /dev/null
++++ b/packages/utils/tsconfig.json
+@@ -0,0 +1,10 @@
++{
++  "extends": "../../tsconfig.base.json",
++  "compilerOptions": {
++    "outDir": "dist",
++    "declaration": true,
++    "declarationMap": true,
++    "emitDeclarationOnly": false
++  },
++  "include": ["src"]
++}
+diff --git a/packages/video-afi/package.json b/packages/video-afi/package.json
+new file mode 100644
+index 0000000000000000000000000000000000000000..fa9f766e57b7cd22fd499122801ff82f2f9b847f
+--- /dev/null
++++ b/packages/video-afi/package.json
+@@ -0,0 +1,27 @@
++{
++  "name": "@trackeovrconia/video-afi",
++  "version": "0.1.0",
++  "main": "dist/index.js",
++  "types": "dist/index.d.ts",
++  "type": "module",
++  "scripts": {
++    "build": "tsup src/index.ts --format esm,cjs --dts",
++    "dev": "tsup src/index.ts --format esm --watch",
++    "lint": "eslint src --ext .ts",
++    "test": "vitest run --passWithNoTests",
++    "clean": "rm -rf dist"
++  },
++  "dependencies": {
++    "onnxruntime-web": "^1.17.0",
++    "@trackeovrconia/utils": "workspace:*"
++  },
++  "devDependencies": {
++    "tsup": "^7.2.0",
++    "typescript": "^5.3.3",
++    "vitest": "^1.2.2",
++    "@types/node": "^20.11.0",
++    "eslint": "^8.56.0",
++    "@typescript-eslint/parser": "^6.17.0",
++    "@typescript-eslint/eslint-plugin": "^6.17.0"
++  }
++}
+diff --git a/packages/video-afi/src/index.ts b/packages/video-afi/src/index.ts
+new file mode 100644
+index 0000000000000000000000000000000000000000..bf7469d8140aaf58612e366e8a8769f0d84dd01c
+--- /dev/null
++++ b/packages/video-afi/src/index.ts
+@@ -0,0 +1,133 @@
++import { InferenceSession, Tensor } from 'onnxruntime-web';
++import { stableFps } from '@trackeovrconia/utils';
++
++export interface AfiConfig {
++  modelUrl: string;
++  targetFps: number;
++  maxMultiplier: number;
++}
++
++export interface FramePair {
++  prev: VideoFrame;
++  next: VideoFrame;
++}
++
++export interface AfiResult {
++  frames: VideoFrame[];
++  multiplier: number;
++  latencyMs: number;
++  backend: 'webgpu' | 'webgl' | 'disabled';
++}
++
++export class AdaptiveFrameInterpolator {
++  private session?: InferenceSession | null;
++  private lastMultiplier = 1;
++  private backend: AfiResult['backend'] = 'disabled';
++  private disabled = false;
++
++  constructor(private readonly config: AfiConfig) {}
++
++  async ensureSession(): Promise<void> {
++    if (this.session || this.disabled) return;
++    try {
++      this.session = await InferenceSession.create(this.config.modelUrl, {
++        executionProviders: ['webgpu', 'webgl'],
++      });
++      const provider = (this.session as InferenceSession & { executionProvider?: string }).executionProvider;
++      if (provider === 'webgpu' || provider === 'webgl') {
++        this.backend = provider;
++      } else if (typeof navigator !== 'undefined' && 'gpu' in navigator) {
++        this.backend = 'webgpu';
++      } else {
++        this.backend = 'webgl';
++      }
++    } catch (error) {
++      console.warn('AdaptiveFrameInterpolator: disabling due to initialisation error', error);
++      this.session = null;
++      this.disabled = true;
++      this.backend = 'disabled';
++    }
++  }
++
++  async interpolate({ prev, next }: FramePair, cameraFps: number): Promise<AfiResult> {
++    const target = stableFps(cameraFps, this.config.targetFps);
++    const multiplier = Math.min(
++      this.config.maxMultiplier,
++      Math.max(1, Math.round(target / Math.max(1, cameraFps))),
++    );
++    this.lastMultiplier = multiplier;
++
++    if (multiplier === 1 || this.disabled) {
++      return { frames: [next], multiplier: 1, latencyMs: 0, backend: this.backend };
++    }
++
++    await this.ensureSession();
++    if (!this.session) {
++      return { frames: [next], multiplier: 1, latencyMs: 0, backend: this.backend };
++    }
++    const start = performance.now();
++    const inputs = await Promise.all([prev, next].map((frame) => this.frameToTensor(frame)));
++    const results: VideoFrame[] = [];
++
++    for (let i = 1; i < multiplier; i += 1) {
++      const t = i / multiplier;
++      const ortInputs = {
++        prev: inputs[0],
++        next: inputs[1],
++        time: new Tensor('float32', new Float32Array([t]), [1]),
++      } as Record<string, Tensor>;
++      const output = await this.session!.run(ortInputs);
++      const tensor = output.interpolated ?? Object.values(output)[0];
++      const frame = await this.tensorToFrame(tensor, prev.displayWidth, prev.displayHeight);
++      results.push(frame);
++    }
++
++    const latencyMs = performance.now() - start;
++    return { frames: [...results, next], multiplier, latencyMs, backend: this.backend };
++  }
++
++  private async frameToTensor(frame: VideoFrame): Promise<Tensor> {
++    const bitmap = await createImageBitmap(frame);
++    const canvas = new OffscreenCanvas(bitmap.width, bitmap.height);
++    const ctx = canvas.getContext('2d');
++    if (!ctx) {
++      throw new Error('Unable to get 2d context for frame conversion');
++    }
++    ctx.drawImage(bitmap, 0, 0);
++    const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
++    const data = new Float32Array(canvas.width * canvas.height * 3);
++    for (let i = 0; i < canvas.width * canvas.height; i += 1) {
++      data[i * 3] = imageData.data[i * 4] / 255;
++      data[i * 3 + 1] = imageData.data[i * 4 + 1] / 255;
++      data[i * 3 + 2] = imageData.data[i * 4 + 2] / 255;
++    }
++    return new Tensor('float32', data, [1, canvas.height, canvas.width, 3]);
++  }
++
++  private async tensorToFrame(tensor: Tensor, width: number, height: number): Promise<VideoFrame> {
++    const [batch, h, w, c] = tensor.dims;
++    if (batch !== 1 || c !== 3) {
++      throw new Error('Unexpected tensor dimensions');
++    }
++    const data = tensor.data as Float32Array;
++    const canvas = new OffscreenCanvas(w, h);
++    const ctx = canvas.getContext('2d');
++    if (!ctx) {
++      throw new Error('Unable to create 2d context for tensor conversion');
++    }
++    const imageData = ctx.createImageData(w, h);
++    for (let i = 0; i < w * h; i += 1) {
++      imageData.data[i * 4] = data[i * 3] * 255;
++      imageData.data[i * 4 + 1] = data[i * 3 + 1] * 255;
++      imageData.data[i * 4 + 2] = data[i * 3 + 2] * 255;
++      imageData.data[i * 4 + 3] = 255;
++    }
++    ctx.putImageData(imageData, 0, 0);
++    const bitmap = await createImageBitmap(canvas);
++    return new VideoFrame(bitmap, { timestamp: performance.now(), displayWidth: width, displayHeight: height });
++  }
++
++  getMultiplier(): number {
++    return this.lastMultiplier;
++  }
++}
+diff --git a/packages/video-afi/tsconfig.json b/packages/video-afi/tsconfig.json
+new file mode 100644
+index 0000000000000000000000000000000000000000..cc019fc462908f77ec493b9eff0976f0b7fc6d9d
+--- /dev/null
++++ b/packages/video-afi/tsconfig.json
+@@ -0,0 +1,10 @@
++{
++  "extends": "../../tsconfig.base.json",
++  "compilerOptions": {
++    "outDir": "dist",
++    "declaration": true,
++    "declarationMap": true,
++    "emitDeclarationOnly": false
++  },
++  "include": ["src"]
++}
+diff --git a/pnpm-workspace.yaml b/pnpm-workspace.yaml
+new file mode 100644
+index 0000000000000000000000000000000000000000..ccdb6614405e49da184eaca01ee230bbe0091b25
+--- /dev/null
++++ b/pnpm-workspace.yaml
+@@ -0,0 +1,4 @@
++packages:
++  - 'apps/*'
++  - 'packages/*'
++  - 'tools'
+diff --git a/tools/osc-listener.js b/tools/osc-listener.js
+new file mode 100755
+index 0000000000000000000000000000000000000000..bbefd15f16fe8bc87d24aab1323cdbcc6c6b4d19
+--- /dev/null
++++ b/tools/osc-listener.js
+@@ -0,0 +1,13 @@
++#!/usr/bin/env node
++import dgram from 'dgram';
++
++const port = Number(process.argv[2] ?? 9000);
++const socket = dgram.createSocket('udp4');
++
++socket.on('message', (msg, rinfo) => {
++  console.log(`[OSC] ${rinfo.address}:${rinfo.port} -> ${msg.toString('hex')}`);
++});
++
++socket.bind(port, () => {
++  console.log(`Escuchando mensajes OSC en puerto ${port}`);
++});
+diff --git a/tools/package.json b/tools/package.json
+new file mode 100644
+index 0000000000000000000000000000000000000000..aaf234dafeea1005f17aed037041849ca32eb209
+--- /dev/null
++++ b/tools/package.json
+@@ -0,0 +1,8 @@
++{
++  "name": "tools",
++  "private": true,
++  "type": "module",
++  "bin": {
++    "osc-listener": "./osc-listener.js"
++  }
++}
+diff --git a/tsconfig.base.json b/tsconfig.base.json
+new file mode 100644
+index 0000000000000000000000000000000000000000..d1b529615d5efd5da95b015703063f233a74af6a
+--- /dev/null
++++ b/tsconfig.base.json
+@@ -0,0 +1,24 @@
++{
++  "compilerOptions": {
++    "target": "ES2022",
++    "module": "ESNext",
++    "moduleResolution": "Node",
++    "baseUrl": ".",
++    "lib": ["ES2023", "DOM"],
++    "resolveJsonModule": true,
++    "esModuleInterop": true,
++    "strict": true,
++    "skipLibCheck": false,
++    "forceConsistentCasingInFileNames": true,
++    "allowJs": false,
++    "noEmit": true,
++    "types": ["node"],
++    "paths": {
++      "@trackeovrconia/proto": ["packages/proto/src/index.ts"],
++      "@trackeovrconia/utils": ["packages/utils/src/index.ts"],
++      "@trackeovrconia/video-afi": ["packages/video-afi/src/index.ts"]
++    }
++  },
++  "include": ["packages", "apps", "tools"],
++  "exclude": ["node_modules", "dist"]
++}
+ 
+EOF
+)
